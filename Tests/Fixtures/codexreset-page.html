@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<!-- Synthetic, minimal parser fixture. Not a captured copy of codexreset.org. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Codex reset forecast fixture</title>
+</head>
+<body>
+  <main>
+    <section aria-label="Latest reset">
+      <div data-testid="reset-exact-time" datetime="2026-10-23T18:11:21.036Z">
+        <time>October 23, 2026 at 18:11 UTC</time>
+      </div>
+      <h2 id="reset-elapsed-title">Quota restored</h2>
+      <p data-testid="quota-restoration-status">
+        Monitored account: 75% → 100%.
+        <strong>Global confirmation pending.</strong>
+      </p>
+    </section>
+
+    <section aria-label="Forecast">
+      <div data-testid="probability-ring-24h" data-target-value="28">
+        <span>28%</span>
+      </div>
+      <div data-testid="probability-ring-48h" data-target-value="49">
+        <span>49%</span>
+      </div>
+      <p data-testid="forecast-summary">
+        28% within 24 hours &amp; 49% within 48 hours, based on recent resets.
+      </p>
+    </section>
+  </main>
+</body>
+</html>

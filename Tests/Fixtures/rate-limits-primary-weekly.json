@@ -1,0 +1,15 @@
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "ordinaryUsageAllowed": true,
+    "rateLimits": {
+      "primary": {
+        "usedPercent": 82,
+        "windowDurationMins": 10080,
+        "resetsAt": 1793382304
+      },
+      "secondary": null
+    }
+  }
+}

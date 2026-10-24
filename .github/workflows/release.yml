@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BUILD_ARCHS: "arm64 x86_64"
+
+jobs:
+  release:
+    name: Build and publish macOS release
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Derive version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          case "$VERSION" in
+            ""|*[!0-9A-Za-z._-]*)
+              echo "Unsupported release tag: $GITHUB_REF_NAME" >&2
+              exit 1
+              ;;
+          esac
+          echo "MARKETING_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          echo "Releasing Codex Reset Tray $VERSION (build ${GITHUB_RUN_NUMBER})"
+
+      - name: Build, test, and validate DMG
+        run: |
+          ./build.sh
+          ./test.sh
+          ./scripts/package-release.sh
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ASSET="dist/CodexResetTray-v${MARKETING_VERSION}-macos-universal.dmg"
+          CHECKSUM="${ASSET}.sha256"
+          test -s "$ASSET"
+          test -s "$CHECKSUM"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$ASSET" "$CHECKSUM" --clobber
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "Codex Reset Tray v${MARKETING_VERSION}" \
+              --notes-file .github/release-notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" "$ASSET" "$CHECKSUM" \
+              --verify-tag \
+              --title "Codex Reset Tray v${MARKETING_VERSION}" \
+              --notes-file .github/release-notes.md
+          fi

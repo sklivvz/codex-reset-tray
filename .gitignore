@@ -1,0 +1,62 @@
+# Build products and package output
+build/
+.build/
+dist/
+DerivedData/
+*.xcarchive
+*.app
+*.dmg
+*.sha256
+.stage-*/
+.dmg-mount.*
+.CodexResetTray-*-rw.dmg
+
+# Local scratch space and captured external content
+.scratch/
+captured/
+captured-*.html
+*-captured.html
+*.webarchive
+*.har
+
+# Actual local usage/account exports (fixtures are under Tests/Fixtures)
+usage-data/
+*.usage.json
+*.local.json
+*rate-limits*.local.json
+
+# Logs and test output
+*.log
+*.trace
+.test-output/
+
+# Credentials and account material
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.mobileprovision
+id_rsa*
+credentials*.json
+secrets*.json
+auth.json
+.netrc
+.npmrc
+.codex/
+
+# macOS metadata
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+
+# Editors and local tooling
+.idea/
+.vscode/
+.swiftpm/
+xcuserdata/
+*.xcuserstate

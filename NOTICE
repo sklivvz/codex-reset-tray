@@ -1,0 +1,16 @@
+Codex Reset Tray
+Copyright (c) 2026 sklivvz
+Project: https://github.com/sklivvz/codex-reset-tray
+
+This project is licensed under the MIT License. See LICENSE for the full text.
+
+"Codex", "OpenAI", and related names and marks are trademarks of their
+respective owners. This project is an independent, unofficial utility and is
+not affiliated with, endorsed by, or sponsored by OpenAI.
+
+codexreset.org is an independent third-party website. Its forecasts are
+informational only, are not part of this repository, and never trigger a
+notification. The page parser can break when that site changes.
+
+The app icon is generated from the checked-in drawing script at
+Tools/generate-app-icon.swift. No third-party icon assets are bundled.

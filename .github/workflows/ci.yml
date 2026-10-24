@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MARKETING_VERSION: "0.1.0"
+  BUILD_NUMBER: "1"
+  BUILD_ARCHS: "arm64 x86_64"
+
+jobs:
+  build-test-package:
+    name: Build, test, and validate DMG
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          swift --version
+          hdiutil help >/dev/null
+
+      - name: Build and test
+        run: |
+          ./build.sh
+          ./test.sh
+
+      - name: Package and validate universal DMG
+        run: ./scripts/package-release.sh
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexResetTray-v0.1.0-macos-universal
+          path: |
+            dist/*.dmg
+            dist/*.sha256
+          if-no-files-found: error
