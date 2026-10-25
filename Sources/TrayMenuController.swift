@@ -200,9 +200,9 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         guard !isMenuOpen else { return }
         // Dismiss the information surface before native menu tracking starts,
         // so a right-click cannot leave the transient popover above the menu.
-        if infoPresenter.isShown {
-            infoPresenter.hide()
-        }
+        // Hide unconditionally: the presenter force-closes any existing
+        // popover, including one whose close was previously only attempted.
+        infoPresenter.hide()
         // Rebuild now: menuNeedsUpdate is not guaranteed to run before the
         // first tracking pass of a menu that is attached on demand.
         apply(TrayMenuModel.make(state: source.menuState))

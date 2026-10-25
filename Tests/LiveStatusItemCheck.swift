@@ -1,16 +1,26 @@
 import AppKit
 
+/// Writes progress directly to stderr, bypassing stdout buffering, so a hosted
+/// CI run that stalls inside AppKit event or menu tracking still shows the
+/// stage that was entered and whether it returned.
+func writeLiveStatus(_ message: String) {
+    FileHandle.standardError.write(Data("[live-status] \(message)\n".utf8))
+}
+
 /// Opt-in integration check. Unlike the default offscreen suite, this creates a
 /// real status item in the current GUI session and sends synthetic mouse events
 /// through a running `NSApplication`. It does not launch the packaged app or use
 /// a user's Codex account.
 ///
 /// The checks execute from a main-actor task while `NSApplication.run()` owns
-/// the main event loop. A watchdog stops the application and a background
-/// escape hatch exits the process if the event loop or a nested menu-tracking
-/// loop fails to return, so this opt-in check cannot hang indefinitely.
+/// the main event loop. A common-mode guard cancels every synthetic menu
+/// tracking pass, and a watchdog stops the application with a background escape
+/// hatch that exits the process if a nested loop fails to return. Progress is
+/// written to stderr before and after each click/menu stage, so this opt-in
+/// check reports where it stalled instead of hanging silently.
 @MainActor
 func runLiveStatusItemCheck() {
+    writeLiveStatus("starting live status item check")
     let application = NSApplication.shared
     expect(!application.isRunning, "live check must start with a stopped NSApplication")
     application.setActivationPolicy(.accessory)
@@ -39,6 +49,7 @@ func runLiveStatusItemCheck() {
 
     watchdog.arm()
     Task { @MainActor in
+        writeLiveStatus("checks task entered the main actor")
         await performLiveStatusItemChecks(
             application: application,
             host: host,
@@ -48,15 +59,22 @@ func runLiveStatusItemCheck() {
             controller: controller
         )
         runState.completed = true
+        writeLiveStatus("checks completed; stopping NSApplication.run()")
         watchdog.disarm()
         application.stop(nil)
+        writeLiveStatus("NSApplication.stop() returned")
     }
 
     // This call blocks this task but runs the real AppKit event loop. The
     // checks above run as main-actor work serviced by that loop, and the
     // watchdog can stop it if any wait or menu-tracking pass gets stuck.
+    writeLiveStatus("entering NSApplication.run()")
     application.run()
 
+    writeLiveStatus(
+        "returned from NSApplication.run(); completed=\(runState.completed) "
+            + "timedOut=\(watchdog.timedOut)"
+    )
     watchdog.disarm()
     if !runState.completed && !watchdog.timedOut {
         expect(
@@ -83,8 +101,9 @@ private func performLiveStatusItemChecks(
     controller: TrayMenuController
 ) async {
     expect(application.isRunning, "live status item checks must run inside NSApplication.run()")
-    print("Live status item check: NSApplication.run() event loop is active")
+    writeLiveStatus("NSApplication.run() event loop is active")
     expect(host.isVisible, "real status item must be visible")
+    writeLiveStatus("waiting for the real status button window")
     await waitForLiveCondition(timeout: 3, "real status button window") {
         host.statusButton?.window != nil
     }
@@ -92,19 +111,23 @@ private func performLiveStatusItemChecks(
         expect(false, "real status button must be mounted in a window")
         return
     }
+    writeLiveStatus("real status button window is available")
     expect(!info.isShown, "real status item must not start with the info popover shown")
     // Let AppKit finish mounting the status-bar window before dispatching a
     // click; without this turn NSPopover cannot anchor to the new window.
     try? await Task.sleep(nanoseconds: 300_000_000)
 
     // Left click: a transient popover hosted below the real status button.
+    writeLiveStatus("left click 1: dispatching mouse-down with queued mouse-up")
     guard sendLeftClick(application, button: button, window: window) else {
         expect(false, "real status-item left-click event must be constructible")
         return
     }
+    writeLiveStatus("left click 1: dispatch returned; waiting for the info popover")
     await waitForLiveCondition(timeout: 3, "left-click shows the info popover") {
         info.isShown
     }
+    writeLiveStatus("left click 1: info popover shown=\(info.isShown)")
     expect(info.isShown, "real left-click must show the info popover")
     expect(info.anchorButton === button, "info popover must anchor to the real status button")
     expectEqual(info.anchorRect, button.bounds, "info popover must anchor to the button bounds")
@@ -161,6 +184,7 @@ private func performLiveStatusItemChecks(
         forecastError: "codexreset.org returned HTTP 503.",
         lastCodexCheck: runtimeNow
     )
+    writeLiveStatus("live update: posting an error state to the open popover")
     source.setState(errorState)
     await flushMainQueue()
     await waitForLiveCondition(timeout: 3, "open live popover follows source updates") {
@@ -170,29 +194,42 @@ private func performLiveStatusItemChecks(
         info.contentView?.model == TrayInfoModel.make(state: errorState),
         "open live popover must follow source updates"
     )
+    writeLiveStatus("live update: open popover followed the source update")
 
     // Right-click while the info popover is open: it must close before/while
     // the native actions menu opens, not remain visible above menu tracking.
+    writeLiveStatus("right click: preparing; info popover shown=\(info.isShown)")
     expect(info.isShown, "right-click check must start with the info popover open")
     var popoverShownWhenMenuOpened: Bool?
+    let rightClickGuard = LiveMenuTrackingGuard(menu: menu, stage: "right click")
     source.onMenuDidOpen = {
+        rightClickGuard.noteMenuWillOpen()
         popoverShownWhenMenuOpened = info.isShown
+        writeLiveStatus(
+            "right click: menuWillOpen probe sees info popover shown=\(info.isShown)"
+        )
     }
     guard let rightClick = statusMouseEvent(
         .rightMouseDown,
         button: button,
         window: window
     ) else {
+        rightClickGuard.disarm()
+        source.onMenuDidOpen = nil
         expect(false, "real status-item right-click event must be constructible")
         return
     }
-    // NSMenu.popUp enters a tracking loop; cancel it automatically so this
-    // check cannot wait for a human click.
+    // NSMenu.popUp enters a tracking loop; the guard cancels every open so
+    // this check cannot wait for a human click or a stray second tracking pass.
     let menuOpensBeforeRightClick = source.menuDidOpenCount
-    let rightClickCanceller = MenuTrackingCanceller(menu: menu)
-    rightClickCanceller.arm(after: 0.5)
+    rightClickGuard.arm()
+    writeLiveStatus("right click: dispatching right mouse-down")
     withExtendedLifetime(controller) { application.sendEvent(rightClick) }
-    rightClickCanceller.disarm()
+    writeLiveStatus(
+        "right click: dispatch returned; menuDidOpenCount=\(source.menuDidOpenCount)"
+    )
+    rightClickGuard.disarm()
+    source.onMenuDidOpen = nil
     expectEqual(
         source.menuDidOpenCount,
         menuOpensBeforeRightClick + 1,
@@ -235,25 +272,40 @@ private func performLiveStatusItemChecks(
     }
     expect(menu.items.contains { $0.title == "Quit Codex Reset Tray" },
            "opened actions menu must contain Quit")
-    source.onMenuDidOpen = nil
 
     // Separately send a control-left click through NSApplication dispatch. It
     // must take the secondary route, open the menu, and never show a popover.
+    writeLiveStatus("control-left click: preparing; info popover shown=\(info.isShown)")
     expect(!info.isShown, "control-left check must start with the info popover hidden")
     var popoverShownWhenControlMenuOpened: Bool?
+    let controlClickGuard = LiveMenuTrackingGuard(
+        menu: menu,
+        stage: "control-left click"
+    )
     source.onMenuDidOpen = {
+        controlClickGuard.noteMenuWillOpen()
         popoverShownWhenControlMenuOpened = info.isShown
+        writeLiveStatus(
+            "control-left click: menuWillOpen probe sees info popover shown=\(info.isShown)"
+        )
     }
     let menuOpensBeforeControlClick = source.menuDidOpenCount
-    let controlClickCanceller = MenuTrackingCanceller(menu: menu)
-    controlClickCanceller.arm(after: 0.5)
-    guard sendControlLeftClick(application, button: button, window: window) else {
-        controlClickCanceller.disarm()
-        source.onMenuDidOpen = nil
+    controlClickGuard.arm()
+    writeLiveStatus("control-left click: dispatching control-left down with queued mouse-up")
+    let controlClickConstructed = sendControlLeftClick(
+        application,
+        button: button,
+        window: window
+    )
+    writeLiveStatus(
+        "control-left click: dispatch returned; menuDidOpenCount=\(source.menuDidOpenCount)"
+    )
+    controlClickGuard.disarm()
+    source.onMenuDidOpen = nil
+    guard controlClickConstructed else {
         expect(false, "real status-item control-left click event must be constructible")
         return
     }
-    controlClickCanceller.disarm()
     expectEqual(
         source.menuDidOpenCount,
         menuOpensBeforeControlClick + 1,
@@ -269,34 +321,42 @@ private func performLiveStatusItemChecks(
         6,
         "control-left menu must still contain exactly the six configuration/actions rows"
     )
-    source.onMenuDidOpen = nil
 
     // Left click reopens the popover, then a second left click toggles it shut.
+    writeLiveStatus("left click reopen: dispatching mouse-down with queued mouse-up")
     guard sendLeftClick(application, button: button, window: window) else {
         expect(false, "real status-item reopen click event must be constructible")
         return
     }
+    writeLiveStatus("left click reopen: dispatch returned; waiting for the info popover")
     await waitForLiveCondition(timeout: 3, "left-click reopens the info popover") {
         info.isShown
     }
+    writeLiveStatus("left click reopen: info popover shown=\(info.isShown)")
     expect(info.isShown, "left-click after the actions menu must reopen the info popover")
+    writeLiveStatus("left click close: dispatching mouse-down with queued mouse-up")
     guard sendLeftClick(application, button: button, window: window) else {
         expect(false, "real status-item toggle-close event must be constructible")
         return
     }
+    writeLiveStatus("left click close: dispatch returned; waiting for the popover to hide")
     await waitForLiveCondition(timeout: 3, "second left click hides the info popover") {
         !info.isShown
     }
+    writeLiveStatus("left click close: info popover shown=\(info.isShown)")
     expect(!info.isShown, "second real left-click must hide the info popover")
 
     // Transient behavior: reopen, then a click outside the popover closes it.
+    writeLiveStatus("outside click setup: dispatching mouse-down with queued mouse-up")
     guard sendLeftClick(application, button: button, window: window) else {
         expect(false, "real status-item outside-click setup event must be constructible")
         return
     }
+    writeLiveStatus("outside click setup: dispatch returned; waiting for the info popover")
     await waitForLiveCondition(timeout: 3, "left-click reopens for outside-click check") {
         info.isShown
     }
+    writeLiveStatus("outside click setup: info popover shown=\(info.isShown)")
     expect(info.isShown, "left-click after the toggle must reopen the info popover")
     if let popoverWindow = info.contentView?.window {
         guard let outsideDown = statusOutsideMouseEvent(
@@ -311,11 +371,13 @@ private func performLiveStatusItemChecks(
             expect(false, "outside-click events must be constructible")
             return
         }
+        writeLiveStatus("outside click: posting outside mouse-down and mouse-up")
         application.postEvent(outsideUp, atStart: false)
         application.postEvent(outsideDown, atStart: true)
         await waitForLiveCondition(timeout: 4, "outside click closes the transient popover") {
             !info.isShown
         }
+        writeLiveStatus("outside click: info popover shown=\(info.isShown)")
         expect(
             !info.isShown,
             "outside click must transiently close the info popover"
@@ -325,39 +387,62 @@ private func performLiveStatusItemChecks(
         expect(false, "reopened info popover must be hosted in a window")
     }
     info.hide()
+    writeLiveStatus("all live status item stages completed")
 }
 
-/// A short main-run-loop timer that ends the actions-menu tracking loop. The
-/// timer is installed in common modes because menu tracking runs in the event
-/// tracking mode, where default-mode-only timers can be starved.
+/// Keeps synthetic actions-menu tracking bounded. The repeating timer runs in
+/// common modes, so it is serviced inside the event-tracking mode used by
+/// `NSMenu.popUp`, and it cancels every tracking pass started while armed. A
+/// queued mouse event that opens a second menu therefore cannot outlive the
+/// click stage that dispatched it.
 @MainActor
-private final class MenuTrackingCanceller: NSObject {
+private final class LiveMenuTrackingGuard: NSObject {
     private let menu: NSMenu
+    private let stage: String
+    private let cancelInterval: TimeInterval
     private var timer: Timer?
+    private(set) var menuWillOpenCount = 0
 
-    init(menu: NSMenu) {
+    init(menu: NSMenu, stage: String, cancelInterval: TimeInterval = 0.4) {
         self.menu = menu
+        self.stage = stage
+        self.cancelInterval = cancelInterval
     }
 
-    func arm(after delay: TimeInterval) {
+    func arm() {
+        disarm()
+        menuWillOpenCount = 0
+        writeLiveStatus("\(stage): arming menu-tracking guard every \(cancelInterval)s")
         let timer = Timer(
-            timeInterval: delay,
+            timeInterval: cancelInterval,
             target: self,
             selector: #selector(cancelTracking(_:)),
             userInfo: nil,
-            repeats: false
+            repeats: true
         )
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
     }
 
+    func noteMenuWillOpen() {
+        menuWillOpenCount += 1
+        writeLiveStatus("\(stage): menu tracking opened (open #\(menuWillOpenCount))")
+    }
+
     func disarm() {
+        guard timer != nil else { return }
         timer?.invalidate()
         timer = nil
+        writeLiveStatus(
+            "\(stage): disarmed menu-tracking guard after \(menuWillOpenCount) open(s)"
+        )
     }
 
     @objc private func cancelTracking(_ timer: Timer) {
+        writeLiveStatus("\(stage): requesting menu tracking cancellation")
+        menu.cancelTrackingWithoutAnimation()
         menu.cancelTracking()
+        writeLiveStatus("\(stage): menu tracking cancellation requested")
     }
 }
 
@@ -382,6 +467,10 @@ private final class LiveStatusItemWatchdog: NSObject {
     }
 
     func arm() {
+        writeLiveStatus(
+            "watchdog: armed for a \(timeout)s application-run timeout "
+                + "(background escape at \(timeout + 5)s)"
+        )
         let timer = Timer(
             timeInterval: timeout,
             target: self,
@@ -398,10 +487,9 @@ private final class LiveStatusItemWatchdog: NSObject {
             let cancelled = self.cancelled
             self.lock.unlock()
             guard !cancelled else { return }
-            FileHandle.standardError.write(
-                Data(
-                    "FAIL: live status item check hard timeout after \(self.timeout)s; exiting\n".utf8
-                )
+            writeLiveStatus(
+                "FAIL: live status item check hard timeout after \(self.timeout)s; "
+                    + "the main run loop did not service the watchdog; exiting"
             )
             exit(2)
         }
@@ -414,6 +502,7 @@ private final class LiveStatusItemWatchdog: NSObject {
 
     func disarm() {
         lock.lock()
+        let wasCancelled = cancelled
         cancelled = true
         lock.unlock()
         timeoutTimer?.invalidate()
@@ -422,14 +511,23 @@ private final class LiveStatusItemWatchdog: NSObject {
         escapeTimer = nil
         backgroundEscape?.cancel()
         backgroundEscape = nil
+        if !wasCancelled {
+            writeLiveStatus("watchdog: disarmed")
+        }
     }
 
     @objc private func handleTimeout(_ timer: Timer) {
         timedOut = true
+        writeLiveStatus(
+            "watchdog: \(Int(timeout))s application-run timeout; the last stage "
+                + "before this line is where the harness stalled"
+        )
         expect(
             false,
             "live status item check exceeded \(Int(timeout))s; watchdog stopped NSApplication.run()"
         )
+        writeLiveStatus("watchdog: cancelling menu tracking and stopping NSApplication")
+        menu.cancelTrackingWithoutAnimation()
         menu.cancelTracking()
         application.stop(nil)
         let escape = Timer(
@@ -444,8 +542,8 @@ private final class LiveStatusItemWatchdog: NSObject {
     }
 
     @objc private func forceExit(_ timer: Timer) {
-        FileHandle.standardError.write(
-            Data("FAIL: live status item check did not return from NSApplication.run(); exiting\n".utf8)
+        writeLiveStatus(
+            "FAIL: live status item check did not return from NSApplication.run(); exiting"
         )
         exit(2)
     }
@@ -467,7 +565,7 @@ private func waitForLiveCondition(
 /// A click in the status-bar window but outside the status button, matching a
 /// user clicking the menu bar away from the popover. Posting it through the
 /// event queue lets NSPopover's transient-close handling observe a real event
-/// instead of only the presenter's `performClose` path.
+/// instead of only the presenter's forced-close path.
 @MainActor
 private func statusOutsideMouseEvent(
     _ type: NSEvent.EventType,
@@ -509,8 +607,9 @@ private func sendLeftClick(
 }
 
 /// Sends the control-left down that the local event monitor must classify as a
-/// secondary click. The down opens the actions menu through NSApplication
-/// dispatch; the canceller ends tracking, then the matching up is delivered.
+/// secondary click. The matching up is queued before the down so native menu
+/// tracking observes and consumes it; delivering the up only after tracking
+/// returns could produce a second control-click action and reopen the menu.
 @MainActor
 private func sendControlLeftClick(
     _ application: NSApplication,
@@ -530,8 +629,12 @@ private func sendControlLeftClick(
     ) else {
         return false
     }
+    application.postEvent(up, atStart: false)
     application.sendEvent(down)
-    application.sendEvent(up)
+    // Menu tracking normally consumes that synthetic up. Drop any copy it did
+    // not consume so it cannot be delivered to the status button later, after
+    // the menu-tracking guard has been disarmed.
+    application.discardEvents(matching: .leftMouseUp, before: nil)
     return true
 }
 

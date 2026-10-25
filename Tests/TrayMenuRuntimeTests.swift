@@ -1610,7 +1610,7 @@ struct TrayMenuRuntimeTests {
         if CommandLine.arguments.contains("--live-status-item") {
             runLiveStatusItemCheck()
             if runtimeFailures > 0 { exit(1) }
-            print(
+            writeLiveStatus(
                 "Real NSStatusItem left-click popover, live update, right-click "
                     + "popover-close/menu-open, control-left menu-open, second-click close, "
                     + "outside-click close, and actions-only menu checks passed under "

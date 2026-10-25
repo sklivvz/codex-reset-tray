@@ -258,8 +258,12 @@ final class TrayInfoPopoverPresenter: TrayInfoPresenting {
     }
 
     func hide() {
-        guard let popover, popover.isShown else { return }
-        popover.performClose(nil)
+        guard let popover else { return }
+        // `performClose(_:)` only attempts to close and can decline when the
+        // popover hosts a nested popover or its window is a child window.
+        // `close()` is the force-close path, so the info surface is gone before
+        // the controller starts native menu tracking for a right/control-click.
+        popover.close()
     }
 
     /// Builds the native popover on first use. Internal so the offscreen tests
