@@ -4,9 +4,9 @@ import Foundation
 // Offscreen tests for the status icon, the icon-label spacing, the click
 // mapping, and the information window. Compiled together with
 // TrayMenuRuntimeTests.swift, which owns main() and the shared harness. Nothing
-// here creates an NSStatusItem or an NSWindow; clicks are synthetic NSEvents
-// delivered to an unmounted NSButton, and the information window is exercised
-// through an injected presenter plus the NSView that fills it.
+// here creates an NSStatusItem or displays an NSWindow. Secondary-click tests
+// use an unshown NSWindow to supply a real event window number and button hit
+// bounds; the information window uses an injected presenter and offscreen view.
 
 /// Renders `image` into an offscreen RGBA bitmap `points` large at `scale`x.
 @MainActor
@@ -155,7 +155,7 @@ func testStatusIconMatchesPackagedAppIcon() {
         return
     }
     expectEqual(harness.controller.statusIconSource, .appIcon, "icon must derive from the app icon")
-    expect(!image.isTemplate, "app-icon status image must not be a template")
+    expect(image.isTemplate, "app-derived menu-bar icon must be a template")
 
     let side = TrayStatusLayout.iconSide
     let pixels = Int(side) * 2
@@ -164,21 +164,44 @@ func testStatusIconMatchesPackagedAppIcon() {
         expect(false, "could not render status icon and reference offscreen")
         return
     }
-    let difference = meanPixelDifference(status, reference, width: pixels, height: pixels)
-    expect(difference < 1.0, "status icon must match AppIcon.icns pixels (mean difference \(difference))")
-
-    // It is also colored, like the packaged icon: the blue gradient, not a
-    // monochrome template glyph.
-    var blueDominant = 0
+    // The white chart bars/reset ring remain in the mask; the opaque blue tile
+    // becomes transparent. A straight isTemplate=true on AppIcon.icns would
+    // fail this because its alpha is opaque across most of the rounded square.
+    var foregroundCount = 0
+    var missingForeground = 0
+    var removedTileCount = 0
+    var remainingTile = 0
+    var coloredCount = 0
     for y in 0..<pixels {
         for x in 0..<pixels {
-            if let color = status.colorAt(x: x, y: y), color.alphaComponent > 0.9,
-               color.blueComponent > color.redComponent + 0.2 {
-                blueDominant += 1
+            guard let source = reference.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                  let glyph = status.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else {
+                continue
+            }
+            if source.alphaComponent > 0.9,
+               source.redComponent > 0.85,
+               source.greenComponent > 0.85 {
+                foregroundCount += 1
+                if glyph.alphaComponent <= 0.5 { missingForeground += 1 }
+            }
+            if source.alphaComponent > 0.9,
+               source.redComponent < 0.3,
+               source.blueComponent > source.redComponent + 0.3 {
+                removedTileCount += 1
+                if glyph.alphaComponent >= 0.2 { remainingTile += 1 }
+            }
+            if glyph.alphaComponent > 0.5,
+               max(glyph.redComponent, glyph.greenComponent, glyph.blueComponent)
+                   - min(glyph.redComponent, glyph.greenComponent, glyph.blueComponent) > 0.05 {
+                coloredCount += 1
             }
         }
     }
-    expect(blueDominant > 100, "status icon must carry the app icon's blue gradient (got \(blueDominant))")
+    expect(foregroundCount > 15, "app icon must provide visible foreground strokes (got \(foregroundCount))")
+    expect(missingForeground < foregroundCount / 20, "white app-icon strokes must survive in tray mask")
+    expect(removedTileCount > 100, "blue tile must provide a meaningful negative-space check")
+    expect(remainingTile < removedTileCount / 20, "blue tile must be transparent in tray mask")
+    expectEqual(coloredCount, 0, "tray mask must have no colored pixels")
 
     // The comparison must be able to fail: the SF Symbol fallback is far away.
     let fallback = Harness(state: populatedState(), appIcon: nil)
@@ -188,10 +211,10 @@ func testStatusIconMatchesPackagedAppIcon() {
         expect(false, "fallback status image must exist")
         return
     }
-    let fallbackDifference = meanPixelDifference(fallbackBitmap, reference, width: pixels, height: pixels)
+    let fallbackDifference = meanPixelDifference(fallbackBitmap, status, width: pixels, height: pixels)
     expect(
-        fallbackDifference > 5 * max(difference, 0.5),
-        "symbol fallback must differ from AppIcon.icns (difference \(fallbackDifference))"
+        fallbackDifference > 1,
+        "symbol fallback must differ from the app-derived mask (difference \(fallbackDifference))"
     )
     expect(fallbackImage.isTemplate, "symbol fallback remains a template image")
     expect(renderedOpaquePixelCount(fallbackImage) > 0, "symbol fallback renders pixels")
@@ -331,19 +354,7 @@ func testLeftClickOpensInfoWindowAndRightClickOpensMenu() async {
     let harness = Harness(state: populatedState())
     let button = harness.statusItem.button
     expect(button.target === harness.controller, "button targets controller")
-    let secondaryClick = harness.controller.secondaryClickRecognizer
-    expect(secondaryClick != nil, "secondary-click recognizer must be installed")
-    expect(
-        button.gestureRecognizers.contains { $0 === secondaryClick },
-        "status button must own the secondary-click recognizer"
-    )
-    expectEqual(secondaryClick?.buttonMask, 0x2, "recognizer listens to the right mouse button")
-    expect(secondaryClick?.target === harness.controller, "recognizer targets controller")
-    expectEqual(
-        secondaryClick?.action,
-        #selector(TrayMenuController.statusItemSecondaryClicked(_:)),
-        "recognizer calls the secondary-click action"
-    )
+    expect(button.gestureRecognizers.isEmpty, "right-click routing does not depend on a gesture recognizer")
 
     // Left click: information window, no menu.
     harness.click(.leftMouseUp)
@@ -379,6 +390,34 @@ func testLeftClickOpensInfoWindowAndRightClickOpensMenu() async {
     harness.menu.performActionForItem(at: quit)
     expectEqual(harness.recorder.terminatedCount, 1, "Quit still terminates")
     await flushMainQueue()
+}
+
+@MainActor
+func testSecondaryEventHitTesting() {
+    let harness = Harness(state: populatedState())
+    let cases: [(NSEvent.EventType, NSEvent.ModifierFlags, Bool, Bool)] = [
+        (.rightMouseDown, [], false, true),
+        (.leftMouseDown, [.control], false, true),
+        (.leftMouseDown, [], false, false),
+        (.rightMouseUp, [], false, false),
+        (.rightMouseDown, [], true, false),
+    ]
+    for (type, modifiers, outside, expected) in cases {
+        guard let event = harness.statusEvent(type, modifiers: modifiers, inside: !outside) else {
+            expect(false, "synthetic mouse event must exist")
+            continue
+        }
+        expectEqual(harness.controller.handleStatusMouseDown(event), expected,
+                    "only secondary mouse-down inside status button is consumed")
+    }
+    if let otherWindow = harness.statusEvent(.rightMouseDown, otherWindow: true) {
+        expect(!harness.controller.handleStatusMouseDown(otherWindow),
+               "right-click in another window must be ignored")
+    } else {
+        expect(false, "other-window event must exist")
+    }
+    expectEqual(harness.statusItem.poppedMenus.count, 2,
+                "only the two valid secondary clicks open menus")
 }
 
 @MainActor
@@ -551,6 +590,7 @@ func runStatusRuntimeTests() async {
     await testHiddenLabelKeepsIconAndRemovesGap()
     testClickClassification()
     await testLeftClickOpensInfoWindowAndRightClickOpensMenu()
+    testSecondaryEventHitTesting()
     await testRightClickShowsCurrentMenuContent()
     await testInfoWindowTracksSourceUpdates()
     testInfoViewRendersOffscreen()

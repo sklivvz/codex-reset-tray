@@ -145,6 +145,7 @@ final class Harness {
     let menu = NSMenu()
     let recorder = ActionRecorder()
     let info = FakeInfoPresenter()
+    private var clickWindow: NSWindow?
     private(set) var controller: TrayMenuController!
 
     convenience init(state: TrayMenuState) {
@@ -166,21 +167,58 @@ final class Harness {
         )
     }
 
-    /// Delivers `type` through the button's real target/action, exactly as the
-    /// status bar button does on a mouse-up.
+    /// Delivers ordinary clicks through target/action and secondary clicks
+    /// through the local monitor's event handler, with a real offscreen window
+    /// number and hit-tested button bounds. It never displays the window.
     func click(_ type: NSEvent.EventType, modifiers: NSEvent.ModifierFlags = []) {
-        recorder.nextEvent = mouseEvent(type, modifiers: modifiers)
         let button = statusItem.button
-        if type == .rightMouseUp {
-            guard let recognizer = controller.secondaryClickRecognizer,
-                  let action = recognizer.action else {
-                expect(false, "right click must have a gesture action")
+        if type == .rightMouseUp || modifiers.contains(.control) {
+            let downType: NSEvent.EventType = type == .rightMouseUp ? .rightMouseDown : .leftMouseDown
+            guard let event = statusEvent(downType, modifiers: modifiers) else {
+                expect(false, "secondary click event must be constructible")
                 return
             }
-            _ = button.sendAction(action, to: recognizer.target)
-        } else {
-            _ = button.sendAction(button.action, to: button.target)
+            expect(controller.handleStatusMouseDown(event), "secondary event must be consumed")
+            return
         }
+        recorder.nextEvent = mouseEvent(type, modifiers: modifiers)
+        _ = button.sendAction(button.action, to: button.target)
+    }
+
+    func statusEvent(
+        _ type: NSEvent.EventType,
+        modifiers: NSEvent.ModifierFlags = [],
+        inside: Bool = true,
+        otherWindow: Bool = false
+    ) -> NSEvent? {
+        if clickWindow == nil {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 240, height: 40),
+                styleMask: .borderless,
+                backing: .buffered,
+                defer: false
+            )
+            let button = statusItem.button
+            button.frame = NSRect(x: 0, y: 0, width: button.image?.size.width ?? 40, height: 22)
+            window.contentView?.addSubview(button)
+            clickWindow = window
+        }
+        guard let window = clickWindow else { return nil }
+        let button = statusItem.button
+        let point = inside
+            ? button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
+            : NSPoint(x: window.contentView?.bounds.maxX ?? 200, y: 30)
+        return NSEvent.mouseEvent(
+            with: type,
+            location: point,
+            modifierFlags: modifiers,
+            timestamp: 0,
+            windowNumber: window.windowNumber + (otherWindow ? 1 : 0),
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )
     }
 
     var model: TrayMenuModel {
@@ -505,7 +543,7 @@ func testFirstOpenHasNonemptyMenuAndVisibleStatusIcon() {
     }
 
     expect(image.size.width > 0 && image.size.height > 0, "status icon must have a visible size")
-    expect(!image.isTemplate, "the app-icon status image keeps its colors")
+    expect(image.isTemplate, "the app-derived status image is a menu-bar template")
     expectEqual(harness.controller.statusIconSource, .appIcon, "status icon source")
     expect(image.tiffRepresentation?.isEmpty == false, "status icon must contain image data")
     let opaquePixels = renderedOpaquePixelCount(image)
@@ -792,7 +830,7 @@ func testMenuBarUsageToggleOffscreen() async {
         expect(false, "hidden state must keep the menu-bar icon")
         return
     }
-    expect(!hiddenImage.isTemplate, "hidden state icon must keep the app icon colors")
+    expect(hiddenImage.isTemplate, "hidden state icon remains a menu-bar template")
     expectEqual(
         hiddenImage.size,
         NSSize(width: TrayStatusLayout.iconSide, height: TrayStatusLayout.iconSide),
@@ -1184,11 +1222,17 @@ func populatedState() -> TrayMenuState {
 struct TrayMenuRuntimeTests {
     @MainActor
     static func main() async {
+        if CommandLine.arguments.contains("--live-status-item") {
+            await runLiveStatusItemCheck()
+            if runtimeFailures > 0 { exit(1) }
+            print("Real NSStatusItem synthetic right-click check passed")
+            return
+        }
         // Required only so NSMenu can dispatch menu-item actions through the
         // application object. The application is never launched or activated.
         let application = NSApplication.shared
         expect(!application.isRunning, "test harness must not run the application")
-        expect(application.windows.isEmpty, "test harness must not create windows")
+        expect(application.windows.isEmpty, "test harness must not display windows")
 
         testFirstOpenHasNonemptyMenuAndVisibleStatusIcon()
         testForecastStatusAndMetaRows()
@@ -1210,7 +1254,7 @@ struct TrayMenuRuntimeTests {
         await runStatusRuntimeTests()
 
         expect(!application.isRunning, "tests must leave the application unlaunched")
-        expect(application.windows.isEmpty, "tests must not create windows")
+        expect(application.windows.allSatisfy { !$0.isVisible }, "tests must not display windows")
 
         if runtimeFailures > 0 {
             FileHandle.standardError.write(
@@ -1221,8 +1265,8 @@ struct TrayMenuRuntimeTests {
         print("Tray menu AppKit runtime integration tests passed")
         print(
             "Scope: offscreen NSMenu/NSMenuItem wiring, synthetic click events, and an "
-                + "offscreen info view with a non-running NSApplication; "
-                + "no NSStatusItem, window, or screen observation."
+                + "offscreen info view and unshown event window with a non-running NSApplication; "
+                + "no NSStatusItem or screen observation."
         )
     }
 }

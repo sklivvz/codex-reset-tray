@@ -45,9 +45,9 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
     private let currentEvent: @MainActor () -> NSEvent?
     private let infoPresenter: any TrayInfoPresenting
     private var cancellable: AnyCancellable?
+    private var statusEventMonitor: Any?
     private var isMenuOpen = false
     let statusLabelView = TrayStatusLabelView()
-    private(set) var secondaryClickRecognizer: NSClickGestureRecognizer?
     private var statusLabelLeading: NSLayoutConstraint?
     /// Which asset the current status icon was derived from.
     private(set) var statusIconSource: TrayStatusIconSource = .appIcon
@@ -109,18 +109,18 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
             button.setAccessibilityLabel("Codex Reset Tray")
             // The status item has no attached menu: a left click opens the
             // information window and a right click opens the actions menu.
-            // NSCell action masks track left clicks; a gesture recognizer
-            // handles the secondary mouse button.
+            // NSCell action masks track ordinary left clicks. A local event
+            // monitor catches secondary mouse-down before NSStatusBarButton's
+            // own tracking can discard it.
             button.target = self
             button.action = #selector(statusItemClicked)
             button.sendAction(on: [.leftMouseUp])
-            let secondaryClick = NSClickGestureRecognizer(
-                target: self,
-                action: #selector(statusItemSecondaryClicked)
-            )
-            secondaryClick.buttonMask = 0x2
-            button.addGestureRecognizer(secondaryClick)
-            secondaryClickRecognizer = secondaryClick
+            statusEventMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.rightMouseDown, .leftMouseDown]
+            ) { [weak self] event in
+                guard let self, self.handleStatusMouseDown(event) else { return event }
+                return nil
+            }
             statusLabelView.translatesAutoresizingMaskIntoConstraints = false
             button.addSubview(statusLabelView)
             let leading = statusLabelView.leadingAnchor.constraint(equalTo: button.centerXAnchor)
@@ -144,6 +144,12 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
                 self.apply(TrayMenuModel.make(state: self.source.menuState))
                 self.refreshInfoWindow()
             }
+        }
+    }
+
+    deinit {
+        if let statusEventMonitor {
+            NSEvent.removeMonitor(statusEventMonitor)
         }
     }
 
@@ -189,8 +195,19 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         handleStatusClick(TrayStatusClick.classify(currentEvent()))
     }
 
-    @objc func statusItemSecondaryClicked(_ sender: Any?) {
+    /// Returns true only for secondary clicks inside this status button. The
+    /// caller consumes those events so AppKit cannot also dispatch a click.
+    func handleStatusMouseDown(_ event: NSEvent) -> Bool {
+        guard event.type == .rightMouseDown
+                || (event.type == .leftMouseDown && event.modifierFlags.contains(.control)),
+              let button = statusItem.statusButton,
+              let window = button.window,
+              event.windowNumber == window.windowNumber,
+              button.bounds.contains(button.convert(event.locationInWindow, from: nil)) else {
+            return false
+        }
         handleStatusClick(.secondary)
+        return true
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -382,7 +399,7 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
 }
 
 @MainActor
-private final class SystemStatusItemHost: TrayStatusItemHost {
+final class SystemStatusItemHost: TrayStatusItemHost {
     private let item: NSStatusItem
 
     init() {
@@ -398,11 +415,14 @@ private final class SystemStatusItemHost: TrayStatusItemHost {
         item.button
     }
 
+    func remove() {
+        NSStatusBar.system.removeStatusItem(item)
+    }
+
     func popUp(_ menu: NSMenu) {
-        // Attach the menu only for this click so left clicks keep reaching the
-        // button's action instead of opening the menu.
-        item.menu = menu
-        item.button?.performClick(nil)
-        item.menu = nil
+        guard let button = item.button else { return }
+        // Pop up the menu directly. Attaching it temporarily and calling
+        // performClick can end tracking before the menu is displayed.
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: button)
     }
 }

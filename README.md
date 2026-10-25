@@ -182,15 +182,18 @@ opener, and a fake termination handler. It exercises real `NSMenu` and
 `NSMenuItem` instances and checks:
 
 - the menu is nonempty before and on the first open;
-- the status button image is rendered from `Resources/AppIcon.icns` and matches
-  the icon's pixels, with the SF Symbol only as a fallback;
+- the status button uses a monochrome template mask derived from the white
+  chart and reset mark in `Resources/AppIcon.icns`, with the SF Symbol only as a
+  fallback; the packaged app icon remains colored;
 - the icon-label gap is 4 pt, measured from a laid-out button, and disappears
   with the label when it is hidden;
-- left and right clicks (synthetic `NSEvent`s through the button's real
-  target/action) open the information window and the actions menu respectively;
+- left clicks through the button action and right/control-click mouse-downs
+  through the event handler open the information window and actions menu
+  respectively;
   the window is an injected fake and its content `NSView` is rendered offscreen;
 - the window follows source updates while open, and informational and error rows
   are never grayed out (error text meets WCAG AA contrast in light and dark);
+
 - status, usage-window, baseline, forecast, forecast-detail, and error rows;
 - the checked **Hide 7d Label** / **Show 7d Label** toggle in both states, with
   the icon still renderable while the text is hidden;
@@ -199,8 +202,14 @@ opener, and a fake termination handler. It exercises real `NSMenu` and
 - Refresh, Copy Status Summary, Open codexreset.org, and Quit wiring;
 - updates while the menu is open edit existing items rather than replacing them.
 
+For a separate check in a GUI session, run
+`./.build/tray-menu-runtime-tests --live-status-item` after `./test.sh`. It
+briefly creates a real `NSStatusItem`, sends a synthetic right-click through
+`NSApplication.sendEvent`, checks that the actions menu opens, then removes the
+status item. This check is opt-in because it touches the menu bar.
+
 The harness creates an `NSApplication` object only so `NSMenu` can dispatch item
-actions. It never calls `run` or `finishLaunching`, never creates an
+actions. It never calls `run` or `finishLaunching`, never displays an
 `NSStatusItem`, activates the app, shows a window, clicks anything on screen, or
 launches the app bundle. It also does not use screenshots, Accessibility UI inspection,
 AppleScript, `CGWindowList`, or the `open` command.
