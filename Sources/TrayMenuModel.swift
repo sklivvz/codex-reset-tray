@@ -5,6 +5,7 @@ enum TrayMenuAction: Hashable {
     case copyStatus
     case toggleMenuBarUsage
     case openWebsite
+    case donate
     case quit
 }
 
@@ -96,6 +97,7 @@ struct TrayMenuState: Equatable {
 /// opening a GUI.
 struct TrayMenuModel: Equatable {
     static let websiteURL = URL(string: "https://codexreset.org/")!
+    static let donationURL = URL(string: "https://paypal.me/sklivvz")!
 
     let items: [TrayMenuItem]
 
@@ -161,6 +163,15 @@ struct TrayMenuModel: Equatable {
                 tone: .normal,
                 isEnabled: true,
                 toolTip: Self.websiteURL.absoluteString
+            )
+        )
+        items.append(
+            TrayMenuItem(
+                role: .action(.donate),
+                title: "Support this project",
+                tone: .normal,
+                isEnabled: true,
+                toolTip: "Open PayPal.Me in your browser to support this project."
             )
         )
         items.append(

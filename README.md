@@ -19,7 +19,7 @@ notifications.
 - All releases: <https://github.com/sklivvz/codex-reset-tray/releases>
 
 The fixes described below are in the current source and are not included in the
-v0.1.0 download. The next release is pending an active donation destination.
+v0.1.0 download.
 
 The DMG contains `CodexResetTray.app`, an `Applications` shortcut for
 drag-to-install, a short README, `LICENSE`, and `NOTICE`.
@@ -143,6 +143,14 @@ Open codexreset.org, and Quit are always in the menu; Quit is enabled and last.
 The app looks for `codex` in common install locations and on `PATH` (including
 Homebrew paths, since Finder-launched apps get a minimal environment). Set
 `CODEX_BINARY=/absolute/path/to/codex` to override discovery.
+
+## Donations
+
+**Support this project** in the tray menu opens
+[PayPal.Me/sklivvz](https://paypal.me/sklivvz) in the default browser. The
+recipient page identifies Marco Cecconi and accepts an amount entered by the
+supporter. The app handles no payment information. The repository's Sponsor
+button uses the same PayPal.Me destination.
 
 ## Build, test, and package
 

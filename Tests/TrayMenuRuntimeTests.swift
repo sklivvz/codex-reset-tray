@@ -697,6 +697,23 @@ func testOpenWebsiteActionWiring() {
 }
 
 @MainActor
+func testDonationActionWiring() {
+    let destination = TrayMenuModel.donationURL
+    let harness = Harness(state: populatedState())
+    guard let index = harness.index(of: .action(.donate)),
+          let item = harness.item(for: .action(.donate)) else {
+        expect(false, "configured donation row must exist")
+        return
+    }
+    expect(item.isEnabled, "donation row must be enabled")
+    expect(item.target === harness.controller, "donation row must target controller")
+    harness.menu.performActionForItem(at: index)
+    expectEqual(harness.recorder.openedURL, destination,
+                "donation action must open the configured URL")
+    expectEqual(harness.recorder.terminatedCount, 0, "donation action must not terminate")
+}
+
+@MainActor
 func testCopyStatusActionWiring() {
     let harness = Harness(state: populatedState())
     guard let index = harness.index(of: .action(.copyStatus)),
@@ -1179,6 +1196,7 @@ struct TrayMenuRuntimeTests {
         await testRefreshActionWiring()
         testCopyStatusActionWiring()
         testOpenWebsiteActionWiring()
+        testDonationActionWiring()
         await testMenuBarUsageToggleOffscreen()
         testMenuBarUsagePreferencePersistence()
         await testForecastRecoveryAfterTemporaryFailure()

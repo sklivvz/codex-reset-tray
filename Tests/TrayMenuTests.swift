@@ -31,6 +31,7 @@ struct TrayMenuTests {
         testNotificationStatusRendering()
         testLoadingRendering()
         testWebsiteURL()
+        testDonationLink()
         testMenuBarUsageToggleModel()
         testCopyStatusSummary()
         testAccessibilityDescription()
@@ -105,6 +106,17 @@ struct TrayMenuTests {
             let actual = TrayMenuModel.make(state: state).items.map(\.role)
             expectEqual(actual, expected, "menu roles must stay stable for in-place updates")
         }
+    }
+
+    private static func testDonationLink() {
+        let destination = TrayMenuModel.donationURL
+        expectEqual(destination.absoluteString, "https://paypal.me/sklivvz",
+                    "donation URL must target the verified recipient")
+        let model = TrayMenuModel.make(state: TrayMenuState())
+        expectEqual(model.item(withRole: .action(.donate))?.title, "Support this project",
+                    "donation row title")
+        expect(model.item(withRole: .action(.donate))?.isEnabled == true,
+               "donation row is actionable")
     }
 
     private static func testForecastRendering() {
