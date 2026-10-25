@@ -488,9 +488,9 @@ struct TrayInfoSection: Equatable {
     let rows: [TrayInfoRow]
 }
 
-/// Pure representation of the information window opened by a left click on the
+/// Pure representation of the information popover opened by a left click on the
 /// status icon. It is derived from the same `TrayMenuState` and the same row
-/// text as the menu, so the window and the menu can never disagree.
+/// text as the menu, so the popover and the menu can never disagree.
 struct TrayInfoModel: Equatable {
     let title: String
     let version: String

@@ -1,7 +1,8 @@
 import AppKit
 
-/// The information window's content. It is a plain `NSView`, so tests can build
-/// it, feed it models, and inspect or render it without ever creating a window.
+/// The information popover's content. It is a plain `NSView`, so tests can
+/// build it, feed it models, and inspect or render it without ever creating a
+/// popover.
 @MainActor
 final class TrayInfoView: NSView {
     static let contentWidth: CGFloat = 380
@@ -198,64 +199,79 @@ final class TrayInfoView: NSView {
     }
 }
 
-/// What the controller needs from whatever shows the information window.
-/// Production uses a real `NSWindow`; tests inject a recorder so no window is
-/// ever created or shown.
+/// What the controller needs from whatever shows the information panel.
+/// Production uses a transient `NSPopover` anchored to the status button; tests
+/// inject a recorder so no popover is ever created or shown.
 @MainActor
 protocol TrayInfoPresenting: AnyObject {
     var isShown: Bool { get }
-    func show(_ model: TrayInfoModel)
+    func show(_ model: TrayInfoModel, relativeTo statusButton: NSStatusBarButton)
     func update(_ model: TrayInfoModel)
     func hide()
 }
 
+/// Shows `TrayInfoView` in a transient popover anchored to the status item's
+/// button, so it follows the menu-bar item instead of floating above the app.
 @MainActor
-final class TrayInfoWindowPresenter: TrayInfoPresenting {
+final class TrayInfoPopoverPresenter: TrayInfoPresenting {
+    /// AppKit anchors the popover below the status item for `.minY`.
+    static let preferredEdge: NSRectEdge = .minY
+
     private let appIconProvider: @MainActor () -> NSImage?
-    private var window: NSWindow?
-    private var view: TrayInfoView?
+    private(set) var popover: NSPopover?
+    private(set) var contentView: TrayInfoView?
+    /// The button and rectangle most recently passed to `NSPopover.show`.
+    private(set) var anchorButton: NSStatusBarButton?
+    private(set) var anchorRect: NSRect?
 
     init(appIconProvider: @escaping @MainActor () -> NSImage?) {
         self.appIconProvider = appIconProvider
     }
 
-    var isShown: Bool { window?.isVisible ?? false }
+    var isShown: Bool { popover?.isShown ?? false }
 
-    func show(_ model: TrayInfoModel) {
-        let (window, view) = ensureWindow()
-        view.update(with: model)
-        window.setContentSize(view.fittingSize)
-        if !window.isVisible {
-            window.center()
-        }
+    func show(_ model: TrayInfoModel, relativeTo statusButton: NSStatusBarButton) {
+        let (popover, contentView) = preparePopover()
+        contentView.update(with: model)
+        popover.contentSize = contentView.fittingSize
+        anchorButton = statusButton
+        anchorRect = statusButton.bounds
         NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+        guard !popover.isShown else { return }
+        popover.show(
+            relativeTo: statusButton.bounds,
+            of: statusButton,
+            preferredEdge: Self.preferredEdge
+        )
     }
 
     func update(_ model: TrayInfoModel) {
-        guard let window, let view, window.isVisible else { return }
-        view.update(with: model)
-        window.setContentSize(view.fittingSize)
+        guard let popover, let contentView, popover.isShown else { return }
+        contentView.update(with: model)
+        popover.contentSize = contentView.fittingSize
     }
 
     func hide() {
-        window?.orderOut(nil)
+        guard let popover, popover.isShown else { return }
+        popover.performClose(nil)
     }
 
-    private func ensureWindow() -> (NSWindow, TrayInfoView) {
-        if let window, let view { return (window, view) }
-        let view = TrayInfoView(appIcon: appIconProvider())
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: NSSize(width: TrayInfoView.contentWidth, height: 300)),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: true
-        )
-        window.title = "Codex Reset Tray"
-        window.isReleasedWhenClosed = false
-        window.contentView = view
-        self.window = window
-        self.view = view
-        return (window, view)
+    /// Builds the native popover on first use. Internal so the offscreen tests
+    /// can inspect its configuration without displaying it.
+    func preparePopover() -> (NSPopover, TrayInfoView) {
+        if let popover, let contentView { return (popover, contentView) }
+
+        let contentView = TrayInfoView(appIcon: appIconProvider())
+        let controller = NSViewController()
+        controller.view = contentView
+
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = controller
+        popover.contentSize = contentView.fittingSize
+
+        self.popover = popover
+        self.contentView = contentView
+        return (popover, contentView)
     }
 }

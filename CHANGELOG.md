@@ -52,9 +52,10 @@ All notable changes are documented here. This project follows
 - Status and forecast rows are no longer grayed out; only genuinely unavailable
   controls are disabled. Error text uses a color with WCAG AA contrast in light
   and dark appearances.
-- Left-clicking the status icon opens an information window (7-day usage,
-  windows, baseline, forecast, errors) that updates while open. Right-clicking
-  (or control-clicking) opens the actions menu.
+- Left-clicking the status icon opens a transient information popover anchored
+  to the menu-bar item (7-day usage, windows, baseline, forecast, errors) that
+  updates while open. Right-clicking (or control-clicking) opens the actions
+  menu.
 - The menu-bar icon is now the packaged `AppIcon.icns` in color instead of an SF
   Symbol; the symbol remains only as a fallback.
 - The gap between the icon and the usage label is a compact 4 pt.

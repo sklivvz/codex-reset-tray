@@ -2,11 +2,12 @@ import AppKit
 import Foundation
 
 // Offscreen tests for the status icon, the icon-label spacing, the click
-// mapping, and the information window. Compiled together with
+// mapping, and the information popover. Compiled together with
 // TrayMenuRuntimeTests.swift, which owns main() and the shared harness. Nothing
-// here creates an NSStatusItem or displays an NSWindow. Secondary-click tests
-// use an unshown NSWindow to supply a real event window number and button hit
-// bounds; the information window uses an injected presenter and offscreen view.
+// here creates an NSStatusItem or displays an NSWindow or NSPopover.
+// Secondary-click tests use an unshown NSWindow to supply a real event window
+// number and button hit bounds; the information popover uses an injected
+// presenter and offscreen content view.
 
 /// Renders `image` into an offscreen RGBA bitmap `points` large at `scale`x.
 @MainActor
@@ -346,41 +347,64 @@ func testClickClassification() {
         .secondary,
         "control-click is a right click"
     )
-    expectEqual(TrayStatusClick.classify(nil), .primary, "no event defaults to the info window")
+    expectEqual(TrayStatusClick.classify(nil), .primary, "no event defaults to the info popover")
 }
 
 @MainActor
-func testLeftClickOpensInfoWindowAndRightClickOpensMenu() async {
+func testLeftClickOpensInfoPopoverAndRightClickOpensMenu() async {
     let harness = Harness(state: populatedState())
     let button = harness.statusItem.button
     expect(button.target === harness.controller, "button targets controller")
     expect(button.gestureRecognizers.isEmpty, "right-click routing does not depend on a gesture recognizer")
 
-    // Left click: information window, no menu.
+    // Left click: information popover anchored to the status button, no menu.
     harness.click(.leftMouseUp)
-    expectEqual(harness.info.shown.count, 1, "left click must show the info window once")
-    expectEqual(harness.info.shown.first, TrayInfoModel.make(state: populatedState()), "info window model")
+    expectEqual(harness.info.shown.count, 1, "left click must show the info popover once")
+    expectEqual(harness.info.shown.first, TrayInfoModel.make(state: populatedState()), "info popover model")
+    expectEqual(harness.info.anchors.count, 1, "left click must supply one anchor")
+    expect(harness.info.anchors.first === button, "left click must anchor the popover to the status button")
+    expectEqual(harness.info.anchors.first?.bounds, button.bounds, "popover anchor uses the button bounds")
     expect(harness.statusItem.poppedMenus.isEmpty, "left click must not open the menu")
     expectEqual(harness.source.menuDidOpenCount, 1, "left click must request a fresh forecast")
-    expect(harness.controller.isInfoWindowShown, "info window reports shown")
+    expect(harness.controller.isInfoPopoverShown, "info popover reports shown")
 
     // A second left click closes it again.
     harness.click(.leftMouseUp)
-    expectEqual(harness.info.hideCount, 1, "second left click must hide the info window")
-    expect(!harness.controller.isInfoWindowShown, "info window reports hidden")
+    expectEqual(harness.info.hideCount, 1, "second left click must hide the info popover")
+    expect(!harness.controller.isInfoPopoverShown, "info popover reports hidden")
     expect(harness.statusItem.poppedMenus.isEmpty, "still no menu")
 
-    // Right click: actions menu, no window.
+    // Right click: actions menu, no popover.
     harness.click(.rightMouseUp)
     expectEqual(harness.statusItem.poppedMenus.count, 1, "right click must open the menu once")
     expect(harness.statusItem.poppedMenus.first === harness.menu, "right click opens the actions menu")
-    expectEqual(harness.info.shown.count, 1, "right click must not show the info window")
+    expectEqual(harness.info.shown.count, 1, "right click must not show the info popover")
+    expectEqual(harness.info.anchors.count, 1, "right click must not change the popover anchor")
     assertMenuMatchesModel(harness, "after right click")
 
     // Control-click behaves as a right click.
     harness.click(.leftMouseUp, modifiers: [.control])
     expectEqual(harness.statusItem.poppedMenus.count, 2, "control-click must open the menu")
-    expectEqual(harness.info.shown.count, 1, "control-click must not show the info window")
+    expectEqual(harness.info.shown.count, 1, "control-click must not show the info popover")
+
+    // NSPopover.transient closes itself during a status-button mouse-down when
+    // the popover is already open. The subsequent mouse-up action must finish
+    // the toggle as a hide instead of immediately reopening the popover.
+    harness.click(.leftMouseUp)
+    expectEqual(harness.info.shown.count, 2, "third left click must reopen the info popover")
+    guard let primaryDown = harness.statusEvent(.leftMouseDown) else {
+        expect(false, "primary mouse-down event must exist")
+        return
+    }
+    expect(!harness.controller.handleStatusMouseDown(primaryDown),
+           "primary mouse-down must not be consumed as a menu click")
+    harness.info.hide()
+    harness.click(.leftMouseUp)
+    expectEqual(harness.info.shown.count, 2,
+                "click that transiently closed the popover must not reopen it")
+    expect(!harness.controller.isInfoPopoverShown, "transient close must leave the popover hidden")
+    harness.click(.leftMouseUp)
+    expectEqual(harness.info.shown.count, 3, "a later left click must open the info popover again")
 
     // Menu operations still work after the new click handling.
     guard let quit = harness.index(of: .action(.quit)) else {
@@ -436,18 +460,18 @@ func testRightClickShowsCurrentMenuContent() async {
 }
 
 @MainActor
-func testInfoWindowTracksSourceUpdates() async {
+func testInfoPopoverTracksSourceUpdates() async {
     let harness = Harness(state: TrayMenuState())
 
-    // Hidden window: source changes must not touch the presenter.
+    // Hidden popover: source changes must not touch the presenter.
     harness.source.setState(populatedState())
     await flushMainQueue()
-    expect(harness.info.updates.isEmpty, "no updates while the window is hidden")
+    expect(harness.info.updates.isEmpty, "no updates while the popover is hidden")
 
     harness.click(.leftMouseUp)
     expectEqual(harness.info.shown.last, TrayInfoModel.make(state: populatedState()), "opened with latest data")
 
-    // Usage and forecast change while the window is open.
+    // Usage and forecast change while the popover is open.
     let errorState = TrayMenuState(
         snapshot: snapshot(),
         codexError: "Codex app-server did not respond within 10 seconds.",
@@ -455,11 +479,11 @@ func testInfoWindowTracksSourceUpdates() async {
         lastCodexCheck: runtimeNow
     )
     harness.source.setState(errorState)
-    expect(harness.info.updates.isEmpty, "window must not change before the main queue runs")
+    expect(harness.info.updates.isEmpty, "popover must not change before the main queue runs")
     await flushMainQueue()
-    expectEqual(harness.info.updates.last, TrayInfoModel.make(state: errorState), "window follows the source")
+    expectEqual(harness.info.updates.last, TrayInfoModel.make(state: errorState), "popover follows the source")
 
-    // Toggling the label from the menu also reaches the open window.
+    // Toggling the label from the menu also reaches the open popover.
     guard let toggle = harness.index(of: .action(.toggleMenuBarUsage)) else {
         expect(false, "toggle must exist")
         return
@@ -468,14 +492,14 @@ func testInfoWindowTracksSourceUpdates() async {
     await flushMainQueue()
     expect(
         harness.info.updates.last?.footer.contains("Menu bar 7d label: hidden") == true,
-        "window reflects the hidden label preference"
+        "popover reflects the hidden label preference"
     )
 
     harness.click(.leftMouseUp)
     let updatesAfterHide = harness.info.updates.count
     harness.source.setState(populatedState())
     await flushMainQueue()
-    expectEqual(harness.info.updates.count, updatesAfterHide, "no updates after the window is closed")
+    expectEqual(harness.info.updates.count, updatesAfterHide, "no updates after the popover is closed")
 }
 
 @MainActor
@@ -569,14 +593,38 @@ func testInfoViewRendersOffscreen() {
 }
 
 @MainActor
-func testInfoWindowPresenterIsLazy() {
+func testInfoPopoverPresenterBuildsTransientPopover() {
     let application = NSApplication.shared
     let windowsBefore = application.windows.count
-    let presenter = TrayInfoWindowPresenter(appIconProvider: { nil })
+    let presenter = TrayInfoPopoverPresenter(appIconProvider: { nil })
+    expect(presenter.popover == nil, "a new presenter must not create a popover")
+    expect(presenter.contentView == nil, "a new presenter must not create content")
+
+    let (popover, view) = presenter.preparePopover()
+    expect(popover.behavior == .transient, "information popover must use transient behavior")
+    expect(popover.contentViewController?.view === view, "popover must host the info view")
+    expect(view.window == nil, "prepared content must stay offscreen until shown")
+    expectEqual(popover.contentSize.width, TrayInfoView.contentWidth, "popover content width")
+    expect(popover.contentSize.height > 150, "popover content height must fit the info view")
+    expectEqual(TrayInfoPopoverPresenter.preferredEdge, .minY, "popover anchors below the status button")
+
+    let same = presenter.preparePopover()
+    expect(same.0 === popover, "preparing twice must reuse the same popover")
+    expect(same.1 === view, "preparing twice must reuse the same content view")
+    expectEqual(application.windows.count, windowsBefore, "preparing a popover must not create a window")
+}
+
+@MainActor
+func testInfoPopoverPresenterIsLazy() {
+    let application = NSApplication.shared
+    let windowsBefore = application.windows.count
+    let presenter = TrayInfoPopoverPresenter(appIconProvider: { nil })
     expect(!presenter.isShown, "a new presenter shows nothing")
     presenter.update(TrayInfoModel.make(state: TrayMenuState()))
     presenter.hide()
     expect(!presenter.isShown, "update/hide before show stay hidden")
+    expect(presenter.popover == nil, "update/hide before show must not create a popover")
+    expect(presenter.anchorButton == nil, "update/hide before show must not capture an anchor")
     expectEqual(application.windows.count, windowsBefore, "presenter must not create a window until shown")
 }
 
@@ -589,10 +637,11 @@ func runStatusRuntimeTests() async {
     testIconLabelSpacingIsCompact()
     await testHiddenLabelKeepsIconAndRemovesGap()
     testClickClassification()
-    await testLeftClickOpensInfoWindowAndRightClickOpensMenu()
+    await testLeftClickOpensInfoPopoverAndRightClickOpensMenu()
     testSecondaryEventHitTesting()
     await testRightClickShowsCurrentMenuContent()
-    await testInfoWindowTracksSourceUpdates()
+    await testInfoPopoverTracksSourceUpdates()
     testInfoViewRendersOffscreen()
-    testInfoWindowPresenterIsLazy()
+    testInfoPopoverPresenterBuildsTransientPopover()
+    testInfoPopoverPresenterIsLazy()
 }

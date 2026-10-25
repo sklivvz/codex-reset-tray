@@ -1,7 +1,7 @@
 import AppKit
 
-/// Colors shared by the menu and the information window. Errors need to stay
-/// readable on both light and dark menu/window backgrounds, which the stock
+/// Colors shared by the menu and the information popover. Errors need to stay
+/// readable on both light and dark menu/popover backgrounds, which the stock
 /// `systemOrange` is not on a light background.
 enum TrayPalette {
     static let error = NSColor(name: nil) { appearance in
@@ -214,7 +214,7 @@ final class TrayStatusLabelView: NSView {
 
 /// How a click on the status item is interpreted.
 enum TrayStatusClick: Equatable {
-    /// Left click: show the information window.
+    /// Left click: show the anchored information popover.
     case primary
     /// Right click (or control-click): show the actions menu.
     case secondary

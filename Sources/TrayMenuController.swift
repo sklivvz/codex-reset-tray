@@ -21,7 +21,7 @@ protocol TrayMenuSource: AnyObject {
 @MainActor
 protocol TrayStatusItemHost: AnyObject {
     var isVisible: Bool { get set }
-    var statusButton: NSButton? { get }
+    var statusButton: NSStatusBarButton? { get }
     /// Shows `menu` under the status item, as a right click does. Production
     /// attaches the menu just long enough to open it; tests only record it.
     func popUp(_ menu: NSMenu)
@@ -47,6 +47,11 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
     private var cancellable: AnyCancellable?
     private var statusEventMonitor: Any?
     private var isMenuOpen = false
+    /// Whether the transient popover was shown when the current status-button
+    /// left-click began. `.transient` can close it before the mouse-up action
+    /// runs, so the action must still treat that click as the closing half of
+    /// the toggle.
+    private var infoPopoverWasShownOnMouseDown = false
     let statusLabelView = TrayStatusLabelView()
     private var statusLabelLeading: NSLayoutConstraint?
     /// Which asset the current status icon was derived from.
@@ -85,7 +90,7 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         self.openURL = openURL
         self.appIconProvider = appIconProvider
         self.currentEvent = currentEvent
-        self.infoPresenter = infoPresenter ?? TrayInfoWindowPresenter(appIconProvider: appIconProvider)
+        self.infoPresenter = infoPresenter ?? TrayInfoPopoverPresenter(appIconProvider: appIconProvider)
         self.writeToPasteboard = writeToPasteboard
         super.init()
 
@@ -108,10 +113,10 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
             button.font = TrayStatusLayout.labelFont
             button.setAccessibilityLabel("Codex Reset Tray")
             // The status item has no attached menu: a left click opens the
-            // information window and a right click opens the actions menu.
-            // NSCell action masks track ordinary left clicks. A local event
-            // monitor catches secondary mouse-down before NSStatusBarButton's
-            // own tracking can discard it.
+            // anchored information popover and a right click opens the actions
+            // menu. NSCell action masks track ordinary left clicks. A local
+            // event monitor catches secondary mouse-down before
+            // NSStatusBarButton's own tracking can discard it.
             button.target = self
             button.action = #selector(statusItemClicked)
             button.sendAction(on: [.leftMouseUp])
@@ -142,7 +147,7 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
                 guard let self else { return }
                 self.updateStatusButton()
                 self.apply(TrayMenuModel.make(state: self.source.menuState))
-                self.refreshInfoWindow()
+                self.refreshInfoPopover()
             }
         }
     }
@@ -153,29 +158,40 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         }
     }
 
-    /// Whether the information window is currently shown.
-    var isInfoWindowShown: Bool { infoPresenter.isShown }
+    /// Whether the information popover is currently shown.
+    var isInfoPopoverShown: Bool { infoPresenter.isShown }
 
-    /// Left click toggles the information window; right click (or
+    /// Left click toggles the information popover; right click (or
     /// control-click) opens the actions menu.
     func handleStatusClick(_ click: TrayStatusClick) {
         switch click {
         case .primary:
-            toggleInfoWindow()
+            toggleInfoPopover()
         case .secondary:
             showActionsMenu()
         }
     }
 
-    private func toggleInfoWindow() {
+    private func toggleInfoPopover() {
+        let wasShownBeforeClick = infoPopoverWasShownOnMouseDown
+        infoPopoverWasShownOnMouseDown = false
         if infoPresenter.isShown {
             infoPresenter.hide()
             return
         }
+        if wasShownBeforeClick {
+            // The transient popover already closed itself when this click
+            // began; this is the hiding half of the toggle, not a new open.
+            return
+        }
+        guard let statusButton = statusItem.statusButton else { return }
         // Same forecast-on-click behavior as opening the menu (debounced by
-        // the store), so the window never opens with a stale forecast.
+        // the store), so the popover never opens with a stale forecast.
         source.menuDidOpen()
-        infoPresenter.show(TrayInfoModel.make(state: source.menuState))
+        infoPresenter.show(
+            TrayInfoModel.make(state: source.menuState),
+            relativeTo: statusButton
+        )
     }
 
     private func showActionsMenu() {
@@ -186,7 +202,7 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         statusItem.popUp(menu)
     }
 
-    private func refreshInfoWindow() {
+    private func refreshInfoPopover() {
         guard infoPresenter.isShown else { return }
         infoPresenter.update(TrayInfoModel.make(state: source.menuState))
     }
@@ -195,19 +211,38 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         handleStatusClick(TrayStatusClick.classify(currentEvent()))
     }
 
+    /// Records whether a primary click began while the transient popover was
+    /// visible. `.transient` may close it during the mouse-down, before the
+    /// button's mouse-up action runs.
+    private func recordInfoPopoverState(before event: NSEvent) {
+        guard event.type == .leftMouseDown,
+              !event.modifierFlags.contains(.control),
+              statusButtonContains(event) else {
+            return
+        }
+        infoPopoverWasShownOnMouseDown = infoPresenter.isShown
+    }
+
     /// Returns true only for secondary clicks inside this status button. The
     /// caller consumes those events so AppKit cannot also dispatch a click.
     func handleStatusMouseDown(_ event: NSEvent) -> Bool {
+        recordInfoPopoverState(before: event)
         guard event.type == .rightMouseDown
                 || (event.type == .leftMouseDown && event.modifierFlags.contains(.control)),
-              let button = statusItem.statusButton,
-              let window = button.window,
-              event.windowNumber == window.windowNumber,
-              button.bounds.contains(button.convert(event.locationInWindow, from: nil)) else {
+              statusButtonContains(event) else {
             return false
         }
         handleStatusClick(.secondary)
         return true
+    }
+
+    private func statusButtonContains(_ event: NSEvent) -> Bool {
+        guard let button = statusItem.statusButton,
+              let window = button.window,
+              event.windowNumber == window.windowNumber else {
+            return false
+        }
+        return button.bounds.contains(button.convert(event.locationInWindow, from: nil))
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -411,7 +446,7 @@ final class SystemStatusItemHost: TrayStatusItemHost {
         set { item.isVisible = newValue }
     }
 
-    var statusButton: NSButton? {
+    var statusButton: NSStatusBarButton? {
         item.button
     }
 

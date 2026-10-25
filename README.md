@@ -49,8 +49,9 @@ packaged `AppIcon.icns` (the packaged app icon remains colored). By default it
 also shows the current 7-day usage text, for example `7d 89%`, a compact 4 pt to
 the right of the icon.
 
-- **Left click** opens an information window with the 7-day usage, usage
-  windows, baseline, forecast, and any errors. It updates while open.
+- **Left click** opens a transient information popover anchored to the
+  menu-bar item, with the 7-day usage, usage windows, baseline, forecast, and
+  any errors. It updates while open.
 - **Right click** (or control-click) opens the actions menu.
 
 - **Hide 7d Label** is a native checked menu item directly below the heading.
@@ -135,7 +136,7 @@ the menu; Quit is enabled and last.
 
 ### codexreset.org forecast
 
-- Forecasts are fetched when the menu or information window opens, or when
+- Forecasts are fetched when the menu or information popover opens, or when
   Refresh is pressed.
 - Refresh also re-polls Codex usage immediately.
 - The forecast shows 24-hour and 48-hour probabilities in the menu, with the
@@ -202,11 +203,15 @@ opener, and a fake termination handler. It exercises real `NSMenu` and
 - the icon-label gap is 4 pt, measured from a laid-out button, and disappears
   with the label when it is hidden;
 - left clicks through the button action and right/control-click mouse-downs
-  through the event handler open the information window and actions menu
-  respectively;
-  the window is an injected fake and its content `NSView` is rendered offscreen;
-- the window follows source updates while open, and informational and error rows
-  are never grayed out (error text meets WCAG AA contrast in light and dark);
+  through the event handler open the information popover and actions menu
+  respectively; the popover is an injected fake that records the real
+  status-button anchor, and its content `NSView` is rendered offscreen;
+- the production popover presenter is configured as `.transient` and hosts the
+  same content view without creating a window before it is shown;
+- the popover follows source updates while open; a transient close during the
+  status-button click still completes the show/hide toggle; informational and
+  error rows are never grayed out (error text meets WCAG AA contrast in light
+  and dark);
 
 - status, usage-window, baseline, forecast, forecast-detail, and error rows;
 - the checked **Hide 7d Label** / **Show 7d Label** toggle in both states, with
@@ -223,20 +228,25 @@ opener, and a fake termination handler. It exercises real `NSMenu` and
 
 For a separate check in a GUI session, run
 `./.build/tray-menu-runtime-tests --live-status-item` after `./test.sh`. It
-briefly creates a real `NSStatusItem`, sends a synthetic right-click through
-`NSApplication.sendEvent`, checks that the actions menu opens, then removes the
-status item. This check is opt-in because it touches the menu bar.
+briefly creates a real `NSStatusItem` and sends synthetic left-click and
+right-click events through `NSApplication.sendEvent`. It checks that left-click
+shows a transient information popover anchored to the real status button,
+follows a live update, toggles closed on a second left click, and that
+right-click opens the actions menu without presenting the popover. It removes
+the status item when done. This check is opt-in because it touches the menu bar
+and briefly displays a popover.
 
-The harness creates an `NSApplication` object only so `NSMenu` can dispatch item
-actions. It never calls `run` or `finishLaunching`, never displays an
-`NSStatusItem`, activates the app, shows a window, clicks anything on screen, or
-launches the app bundle. It also does not use screenshots, Accessibility UI inspection,
-AppleScript, `CGWindowList`, or the `open` command.
+The offscreen harness creates an `NSApplication` object only so `NSMenu` can
+dispatch item actions. It never calls `run` or `finishLaunching`, never displays
+an `NSStatusItem` or popover, activates the app, shows a window, clicks anything
+on screen, or launches the app bundle. It also does not use screenshots,
+Accessibility UI inspection, AppleScript, `CGWindowList`, or the `open` command.
 
-**This is not a GUI test.** Actual menu-bar rendering/positioning, the real
-status item's appearance, menu click/tracking behavior, opening a browser, and
-process termination through `NSApplication` are not proven by this suite. Those
-claims require desktop interaction and are deliberately not called verified.
+**The default suite is not a GUI test.** Actual menu-bar rendering/positioning,
+real user click/tracking behavior, opening a browser, and process termination
+through `NSApplication` are not proven there. The opt-in live check covers the
+real status button and popover show/hide/anchor with synthetic events, but it is
+not a substitute for desktop interaction testing.
 
 `Tests/BundleTests.sh` decodes every representation of both `AppIcon.icns` files
 and every iconutil-extracted size to prove each contains nontransparent pixels.

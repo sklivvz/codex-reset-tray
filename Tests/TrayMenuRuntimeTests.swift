@@ -4,9 +4,10 @@ import Foundation
 import UserNotifications
 
 // This executable is an offscreen AppKit integration test. It constructs the
-// real TrayMenuController around a fake menu source and an unmounted NSButton.
-// It never creates an NSStatusItem, shows a window, activates the application,
-// starts a run loop, or launches the app bundle.
+// real TrayMenuController around a fake menu source and an unmounted
+// NSStatusBarButton. It never creates an NSStatusItem, shows a window or
+// popover, activates the application, starts a run loop, or launches the app
+// bundle.
 //
 // NSApplication.shared is instantiated only because NSMenu dispatches item
 // actions through the application object; -run and -finishLaunching are never
@@ -96,28 +97,30 @@ final class FakeTraySource: ObservableObject, TrayMenuSource {
 @MainActor
 final class FakeStatusItemHost: TrayStatusItemHost {
     var isVisible = false
-    let button = NSButton()
+    let button = NSStatusBarButton()
     /// Menus the controller asked the (fake) status item to show.
     private(set) var poppedMenus: [NSMenu] = []
-    var statusButton: NSButton? { button }
+    var statusButton: NSStatusBarButton? { button }
 
     func popUp(_ menu: NSMenu) {
         poppedMenus.append(menu)
     }
 }
 
-/// Stands in for the information window: records what the controller asked it
-/// to do, and never creates or shows an NSWindow.
+/// Stands in for the information popover: records what the controller asked it
+/// to do, including the anchor, and never creates or shows an NSPopover.
 @MainActor
 final class FakeInfoPresenter: TrayInfoPresenting {
     private(set) var isShown = false
     private(set) var shown: [TrayInfoModel] = []
+    private(set) var anchors: [NSStatusBarButton] = []
     private(set) var updates: [TrayInfoModel] = []
     private(set) var hideCount = 0
 
-    func show(_ model: TrayInfoModel) {
+    func show(_ model: TrayInfoModel, relativeTo statusButton: NSStatusBarButton) {
         isShown = true
         shown.append(model)
+        anchors.append(statusButton)
     }
 
     func update(_ model: TrayInfoModel) {
@@ -1578,7 +1581,7 @@ struct TrayMenuRuntimeTests {
         if CommandLine.arguments.contains("--live-status-item") {
             await runLiveStatusItemCheck()
             if runtimeFailures > 0 { exit(1) }
-            print("Real NSStatusItem synthetic right-click check passed")
+            print("Real NSStatusItem left-click popover and right-click menu checks passed")
             return
         }
         // Required only so NSMenu can dispatch menu-item actions through the
@@ -1626,7 +1629,7 @@ struct TrayMenuRuntimeTests {
         print(
             "Scope: offscreen NSMenu/NSMenuItem wiring, synthetic click events, and an "
                 + "offscreen info view and unshown event window with a non-running NSApplication; "
-                + "no NSStatusItem or screen observation."
+                + "no NSStatusItem, popover, or screen observation."
         )
     }
 }

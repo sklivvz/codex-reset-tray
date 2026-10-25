@@ -75,8 +75,8 @@ extension UNUserNotificationCenter: UserNotificationCenterClient {
 
 /// Without a delegate, a notification request with a nil trigger can be
 /// suppressed while this accessory app is active. Presenting it through
-/// `willPresent` keeps the alert visible even when the menu or info window has
-/// focus.
+/// `willPresent` keeps the alert visible even when the menu or information
+/// popover has focus.
 final class NotificationPresentationDelegate: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationPresentationDelegate()
     static let foregroundOptions: UNNotificationPresentationOptions = [.banner, .sound, .list]
