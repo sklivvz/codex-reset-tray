@@ -7,6 +7,7 @@ OUTPUT="$OUTPUT_DIR/codex-tests"
 MENU_OUTPUT="$OUTPUT_DIR/tray-menu-tests"
 RUNTIME_OUTPUT="$OUTPUT_DIR/tray-menu-runtime-tests"
 ICON_CHECK_OUTPUT="$OUTPUT_DIR/icon-pixel-check"
+PARSER_OUTPUT="$OUTPUT_DIR/parser-tests"
 CACHE_DIR="$OUTPUT_DIR/swift-module-cache"
 MARKETING_VERSION=${MARKETING_VERSION:-0.1.0}
 BUILD_NUMBER=${BUILD_NUMBER:-1}
@@ -21,6 +22,15 @@ swiftc -swift-version 5 -parse-as-library \
     -o "$OUTPUT"
 
 "$OUTPUT" "$ROOT/Tests/Fixtures"
+
+swiftc -swift-version 5 -parse-as-library \
+    -module-cache-path "$CACHE_DIR" \
+    "$ROOT/Sources/AppBuildInfo.swift" \
+    "$ROOT/Sources/ResetPage.swift" \
+    "$ROOT/Tests/ParserSmoke.swift" \
+    -o "$PARSER_OUTPUT"
+
+"$PARSER_OUTPUT" "$ROOT/Tests/Fixtures/codexreset-page.html"
 
 swiftc -swift-version 5 -parse-as-library \
     -module-cache-path "$CACHE_DIR" \

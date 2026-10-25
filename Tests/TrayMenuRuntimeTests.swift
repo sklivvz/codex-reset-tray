@@ -430,7 +430,8 @@ func testErrorRows() {
             snapshot: snapshot(),
             forecast: forecast(),
             forecastError: forecastMessage,
-            lastForecastCheck: runtimeNow
+            lastForecastCheck: runtimeNow,
+            lastForecastSuccess: runtimeNow.addingTimeInterval(-3600)
         )
     )
     assertMenuMatchesModel(cachedHarness, "cached forecast with fresh error")
@@ -438,6 +439,7 @@ func testErrorRows() {
         cachedHarness.item(for: .forecastSummary)?.title.contains("28% within 24h") == true,
         "cached probabilities stay visible"
     )
+    expect(cachedHarness.item(for: .forecastSummary)?.title.contains("stale, updated") == true, "cached forecast shows freshness")
     expect(
         cachedHarness.item(for: .forecastDetail)?.title.contains(forecastMessage) == true,
         "fresh forecast error renders on the detail row"
@@ -647,6 +649,31 @@ func testMenuBarUsagePreferencePersistence() {
 }
 
 @MainActor
+func testForecastRecoveryAfterTemporaryFailure() async {
+    var calls = 0
+    let store = ResetStore(fetchForecast: {
+        calls += 1
+        if calls == 2 { throw ResetPage.FetchError.httpStatus(503) }
+        return forecast()
+    })
+    await store.refreshForecast()
+    let firstSuccess = store.lastForecastSuccess
+    expect(firstSuccess != nil, "successful forecast records its update time")
+
+    store.menuDidOpen()
+    await waitUntil { store.forecastError != nil }
+    expectEqual(calls, 2, "menu opening attempts a refresh")
+    expect(store.forecast != nil, "failed refresh retains the cached forecast")
+    expectEqual(store.lastForecastSuccess, firstSuccess, "failed refresh preserves cached freshness")
+    expect(store.menuState.forecastError != nil, "failed refresh surfaces an error")
+
+    store.menuDidOpen()
+    await waitUntil { calls == 3 && store.forecastError == nil }
+    expectEqual(calls, 3, "menu opening retries immediately after failure")
+    expect(store.lastForecastSuccess != nil, "recovery records a successful update")
+}
+
+@MainActor
 func testQuitActionWiring() {
     let harness = Harness(state: populatedState())
     guard let index = harness.index(of: .action(.quit)),
@@ -774,6 +801,7 @@ struct TrayMenuRuntimeTests {
         testOpenWebsiteActionWiring()
         await testMenuBarUsageToggleOffscreen()
         testMenuBarUsagePreferencePersistence()
+        await testForecastRecoveryAfterTemporaryFailure()
         testQuitActionWiring()
         await testOpenMenuUpdatesInPlaceAndCloseRebuilds()
 

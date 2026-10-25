@@ -45,6 +45,7 @@ struct TrayMenuState: Equatable {
     var isFetchingForecast: Bool
     var lastCodexCheck: Date?
     var lastForecastCheck: Date?
+    var lastForecastSuccess: Date?
     var showsUsageInMenuBar: Bool
 
     init(
@@ -59,6 +60,7 @@ struct TrayMenuState: Equatable {
         isFetchingForecast: Bool = false,
         lastCodexCheck: Date? = nil,
         lastForecastCheck: Date? = nil,
+        lastForecastSuccess: Date? = nil,
         showsUsageInMenuBar: Bool = true
     ) {
         self.snapshot = snapshot
@@ -72,6 +74,7 @@ struct TrayMenuState: Equatable {
         self.isFetchingForecast = isFetchingForecast
         self.lastCodexCheck = lastCodexCheck
         self.lastForecastCheck = lastForecastCheck
+        self.lastForecastSuccess = lastForecastSuccess
         self.showsUsageInMenuBar = showsUsageInMenuBar
     }
 }
@@ -188,6 +191,9 @@ struct TrayMenuModel: Equatable {
         }
         if let lastCheck = state.lastForecastCheck {
             lines.append("Last forecast check: \(dateText(lastCheck))")
+        }
+        if let lastSuccess = state.lastForecastSuccess {
+            lines.append("Forecast last updated: \(dateText(lastSuccess))")
         }
         if let notificationStatus = state.notificationStatus {
             lines.append("Notifications: \(notificationStatus)")
@@ -333,12 +339,14 @@ struct TrayMenuModel: Equatable {
 
     private static func forecastSummaryItem(_ state: TrayMenuState) -> TrayMenuItem {
         if let forecast = state.forecast {
+            let stale = state.forecastError != nil
+            let freshness = stale ? " (stale, updated \(state.lastForecastSuccess.map(dateText) ?? "time unknown"))" : ""
             return TrayMenuItem(
                 role: .forecastSummary,
-                title: "Forecast: \(forecast.probability24h)% within 24h · \(forecast.probability48h)% within 48h",
-                tone: .normal,
+                title: "Forecast\(freshness): \(forecast.probability24h)% within 24h · \(forecast.probability48h)% within 48h",
+                tone: stale ? .error : .normal,
                 isEnabled: false,
-                toolTip: forecast.forecastSummary
+                toolTip: stale ? "\(forecast.forecastSummary)\nLast updated: \(state.lastForecastSuccess.map(dateText) ?? "unknown")" : forecast.forecastSummary
             )
         }
 
@@ -368,7 +376,7 @@ struct TrayMenuModel: Equatable {
             if let error = state.forecastError {
                 return TrayMenuItem(
                     role: .forecastDetail,
-                    title: "Forecast error: \(error)",
+                    title: "Forecast refresh failed: \(error)",
                     tone: .error,
                     isEnabled: false,
                     toolTip: nil
@@ -378,6 +386,9 @@ struct TrayMenuModel: Equatable {
             var toolTipParts = [forecast.restorationStatus, forecast.forecastSummary]
             if let lastCheck = state.lastForecastCheck {
                 toolTipParts.append("Forecast read at \(dateText(lastCheck))")
+            }
+            if let lastSuccess = state.lastForecastSuccess {
+                toolTipParts.append("Forecast updated at \(dateText(lastSuccess))")
             }
             return TrayMenuItem(
                 role: .forecastDetail,
