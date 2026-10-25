@@ -98,21 +98,14 @@ enum RestorationDetector {
             return RestorationEvaluation(baseline: next, alert: nil)
         }
 
-        // A missing prior deadline, no observed usage to restore, or an alert
-        // already scheduled for that window cannot produce another alert.
+        // A missing prior deadline or an alert already scheduled for that window
+        // cannot produce another alert. Prior usage does not gate a confirmed new
+        // window: a 0% baseline can still roll over to a new deadline.
         guard let deadline = previous.resetsAt,
-              !isSameDeadline(previous.alertedResetsAt, deadline),
-              previous.usedPercent > 0 else {
+              !isSameDeadline(previous.alertedResetsAt, deadline) else {
             return RestorationEvaluation(baseline: next, alert: nil)
         }
 
-        let currentIsLow = current.usedPercent <= restoredUsageCeilingPercent
-        let drop = previous.usedPercent - current.usedPercent
-        let relativeDrop = drop / previous.usedPercent
-        let clearedToNearZero = current.usedPercent <= nearZeroPercent
-            && drop >= nearZeroDropPoints
-        let materialDrop = drop >= materialDropPoints
-            && relativeDrop >= materialDropFraction
         // A new deadline is direct evidence that a window boundary happened.
         // This is the only signal that survives when usage has already climbed
         // again before the next poll, and it is how a normal scheduled rollover
@@ -127,7 +120,12 @@ enum RestorationDetector {
         let earlyWindowChange = deadlineAdvanced && !atOrPastScheduledDeadline
         // Some early restorations clear usage without advancing the window
         // deadline. A material drop to a low reading is still a reset signal.
-        let usageRestoration = currentIsLow && (materialDrop || clearedToNearZero)
+        // Unlike a confirmed new window, this inference needs prior usage to
+        // measure a drop and cannot apply to a 0% baseline.
+        let usageRestoration = hasRestorativeUsageDrop(
+            previousPercent: previous.usedPercent,
+            currentPercent: current.usedPercent
+        )
 
         guard scheduledWindowChange || earlyWindowChange || usageRestoration else {
             return RestorationEvaluation(baseline: next, alert: nil)
@@ -156,6 +154,24 @@ enum RestorationDetector {
                 ordinaryUsageAllowed: ordinaryUsageAllowed
             )
         )
+    }
+
+    /// Same-deadline usage-drop inference requires prior usage: a 0% baseline
+    /// has no usage to restore, and a later increase is evidence of use, not of
+    /// a reset. A confirmed new deadline does not depend on this rule.
+    private static func hasRestorativeUsageDrop(
+        previousPercent: Double,
+        currentPercent: Double
+    ) -> Bool {
+        guard previousPercent > 0 else { return false }
+        let currentIsLow = currentPercent <= restoredUsageCeilingPercent
+        let drop = previousPercent - currentPercent
+        let relativeDrop = drop / previousPercent
+        let clearedToNearZero = currentPercent <= nearZeroPercent
+            && drop >= nearZeroDropPoints
+        let materialDrop = drop >= materialDropPoints
+            && relativeDrop >= materialDropFraction
+        return currentIsLow && (materialDrop || clearedToNearZero)
     }
 
     /// Dates persisted through UserDefaults are stored at second precision. The

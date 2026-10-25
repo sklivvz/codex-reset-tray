@@ -12,7 +12,9 @@ All notable changes are documented here. This project follows
 - Detect and notify for normal scheduled 7-day window rollovers as well as early
   resets. An advancing `resetsAt` is sufficient evidence even when usage has
   already climbed in the new window; the old behavior suppressed every reset at
-  or near the scheduled deadline.
+  or near the scheduled deadline. A confirmed new window also alerts when the
+  prior baseline was 0%; prior usage now gates only same-deadline usage-drop
+  inference.
 - Classify the notification as a scheduled or early reset and avoid duplicate
   notifications with the persisted per-deadline marker. Startup still adopts the
   first reading without alerting, and time passing without a new deadline or a

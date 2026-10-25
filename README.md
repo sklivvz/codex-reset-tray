@@ -91,16 +91,17 @@ considered only when **all** of these are true:
    reading after launch only adopts current state and never alerts, even when a
    persisted baseline exists, because that state may describe a reset that
    happened while the app was closed.
-2. The prior 7-day usage was greater than 0%.
-3. No notification has already been scheduled for that prior reset deadline.
-4. Codex reports a genuine reset signal: either the new 7-day `resetsAt` is at
+2. No notification has already been scheduled for that prior reset deadline.
+3. Codex reports a genuine reset signal: either the new 7-day `resetsAt` is at
    least 5 minutes later than the prior deadline (a new window, whether scheduled
-   or early), or current usage is at most 25% and has fallen materially (at least
-   3 percentage points and at least half of the prior usage, or cleared to 1% or
-   less from at least 2 points). The usage ceiling is deliberately above 1%:
-   usage can be consumed again before the next poll after a reset. A deadline
-   advancing is sufficient even when usage has already climbed in the new
-   window.
+   or early), or, when prior usage was greater than 0%, current usage is at most
+   25% and has fallen materially (at least 3 percentage points and at least half
+   of the prior usage, or cleared to 1% or less from at least 2 points). A
+   confirmed new window alerts even from a 0% baseline; the prior-usage
+   requirement applies only to same-deadline usage-drop inference. The usage
+   ceiling is deliberately above 1%: usage can be consumed again before the next
+   poll after a reset. A deadline advancing is sufficient even when usage has
+   already climbed in the new window.
 
 A window change at or within 5 minutes before the prior deadline is reported as
 the normal **scheduled** reset. A new window or a usage restoration before that

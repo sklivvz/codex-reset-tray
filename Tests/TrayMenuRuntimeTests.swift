@@ -1217,6 +1217,58 @@ func testScheduledResetSchedulesNotification() async {
 }
 
 @MainActor
+func testZeroUsageScheduledRolloverSchedulesNotification() async {
+    let (defaults, suite) = makeStoreDefaults("zero-usage-scheduled-reset")
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let oldDeadline = Date().addingTimeInterval(-60)
+    let nextDeadline = oldDeadline.addingTimeInterval(7 * 86_400)
+    let fetcher = StubRateLimitFetcher([
+        .success(weeklySnapshot(usedPercent: 0, resetsAt: oldDeadline)),
+        .success(weeklySnapshot(usedPercent: 0, resetsAt: nextDeadline)),
+        .success(weeklySnapshot(usedPercent: 0, resetsAt: nextDeadline)),
+    ])
+    let scheduler = StubNotificationScheduler()
+    let store = ResetStore(defaults: defaults, notifications: scheduler, fetchRateLimits: {
+        try fetcher.next()
+    })
+
+    await store.pollCodex()
+    expectEqual(store.baseline?.usedPercent, 0, "startup baseline adopts zero pre-reset usage")
+    expectEqual(scheduler.scheduleCallCount, 0, "startup must not notify a zero-usage baseline")
+
+    await store.pollCodex()
+    expectEqual(
+        scheduler.scheduleCallCount,
+        1,
+        "zero-usage scheduled rollover schedules a notification"
+    )
+    expectEqual(
+        scheduler.scheduledAlerts.first?.timing,
+        .scheduled,
+        "store carries scheduled timing for zero prior usage"
+    )
+    expectEqual(
+        scheduler.scheduledAlerts.first?.previousPercent,
+        0,
+        "zero-usage notification keeps the prior reading"
+    )
+    expectEqual(store.baseline?.usedPercent, 0, "zero-usage success adopts the new window")
+    expectEqual(store.baseline?.resetsAt, nextDeadline, "zero-usage success adopts the new deadline")
+    expectEqual(
+        store.baseline?.alertedResetsAt,
+        oldDeadline,
+        "zero-usage success marks the old deadline"
+    )
+
+    await store.pollCodex()
+    expectEqual(
+        scheduler.scheduleCallCount,
+        1,
+        "the next poll in the zero-usage window must not duplicate"
+    )
+}
+
+@MainActor
 func testNotificationFailureRetriesAndCommitsOnlyAfterSuccess() async {
     let (defaults, suite) = makeStoreDefaults("notification-retry")
     defer { defaults.removePersistentDomain(forName: suite) }
@@ -1551,6 +1603,7 @@ struct TrayMenuRuntimeTests {
         await testSystemSchedulerRequestsOnlyWhenUndecided()
         await testSystemSchedulerReportsSanitizedErrorDomainAndCode()
         await testScheduledResetSchedulesNotification()
+        await testZeroUsageScheduledRolloverSchedulesNotification()
         await testNotificationFailureRetriesAndCommitsOnlyAfterSuccess()
         await testDeniedNotificationDoesNotCommitMarker()
         await testUndecidedNotificationPermissionIsRequestedOnce()
