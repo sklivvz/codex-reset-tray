@@ -44,9 +44,10 @@ shasum -a 256 -c CodexResetTray-v0.1.0-macos-universal.dmg.sha256
 
 ## Menu-bar usage toggle
 
-The menu-bar item always shows the app icon (derived from the packaged
-`AppIcon.icns`, in color). By default it also shows the current 7-day usage
-text, for example `7d 89%`, a compact 4 pt to the right of the icon.
+The menu-bar item always shows a monochrome template glyph derived from the
+packaged `AppIcon.icns` (the packaged app icon remains colored). By default it
+also shows the current 7-day usage text, for example `7d 89%`, a compact 4 pt to
+the right of the icon.
 
 - **Left click** opens an information window with the 7-day usage, usage
   windows, baseline, forecast, and any errors. It updates while open.
