@@ -11,10 +11,9 @@ whether that happens at its scheduled deadline or early. It also shows
 information popover, but those forecasts are informational and never trigger
 notifications.
 
-![The compact Codex Reset Tray popover showing 24% 7-day Codex usage and 29% / 50% reset forecasts for the next 24 / 48 hours](docs/images/compact-popover.png)
 
-*The current source build's compact left-click popover. The downloadable
-[v0.1.0 release](#download-for-macos) is older and does not include it.*
+<img alt="The compact Codex Reset Tray popover showing 24% 7-day Codex usage and 29% / 50% reset forecasts for the next 24 / 48 hours" src="./docs/images/compact-popover.png" style="width: 307px;"/>
+
 
 ## Download for macOS
 
