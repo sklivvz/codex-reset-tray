@@ -339,6 +339,8 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
             return #selector(toggleMenuBarUsage)
         case .action(.openWebsite):
             return #selector(openWebsite)
+        case .action(.donate):
+            return #selector(donate)
         case .action(.quit):
             return #selector(quit)
         default:
@@ -364,6 +366,10 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
 
     @objc private func openWebsite(_ sender: NSMenuItem) {
         openURL(Self.websiteURL)
+    }
+
+    @objc private func donate(_ sender: NSMenuItem) {
+        openURL(TrayMenuModel.donationURL)
     }
 
     @objc private func quit(_ sender: NSMenuItem) {
