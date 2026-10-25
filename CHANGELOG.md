@@ -5,7 +5,6 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-10-25
 
 - Detect early 7-day quota restoration from a materially lower post-reset usage
   reading, not only from usage at or below 1%. A new reset deadline can also
