@@ -57,7 +57,8 @@ enum TrayStatusIcon {
     /// The icon packaged in the app bundle (`Contents/Resources/AppIcon.icns`,
     /// copied from `Resources/AppIcon.icns` by build.sh).
     static func bundledAppIcon(bundle: Bundle = .main) -> NSImage? {
-        guard let url = bundle.url(forResource: "AppIcon", withExtension: "icns") else {
+        guard let url = bundle.resourceURL?.appendingPathComponent("AppIcon.icns"),
+              FileManager.default.fileExists(atPath: url.path) else {
             return nil
         }
         return NSImage(contentsOf: url)

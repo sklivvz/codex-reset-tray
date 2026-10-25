@@ -100,8 +100,8 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
             // NSStatusBarButton's own image+title gap is too wide and not
             // configurable, so the button draws only the icon canvas and the
             // usage text is a sibling view placed a fixed TrayStatusLayout.labelGap
-            // after the icon. `button.title` still carries the text for tooltips
-            // and tests, but is not drawn with .imageOnly.
+            // after the icon. The button title stays empty to prevent AppKit
+            // from silently switching imageOnly back to imageLeading.
             button.imagePosition = .imageOnly
             button.imageScaling = .scaleNone
             button.font = TrayStatusLayout.labelFont
@@ -211,7 +211,8 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         statusIconSource = base.source
         let canvas = TrayStatusLayout.canvasSize(labelWidth: labelWidth)
         button.image = TrayStatusIcon.canvasImage(base: base, canvas: canvas)
-        button.title = title
+        button.title = ""
+        button.imagePosition = .imageOnly
         statusLabelView.text = title
         statusLabelView.isHidden = title.isEmpty
         // The button centers the canvas image, so anchor the label relative to

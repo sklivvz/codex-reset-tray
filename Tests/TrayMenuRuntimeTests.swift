@@ -147,7 +147,11 @@ final class Harness {
     let info = FakeInfoPresenter()
     private(set) var controller: TrayMenuController!
 
-    init(state: TrayMenuState, appIcon: NSImage? = packagedAppIcon()) {
+    convenience init(state: TrayMenuState) {
+        self.init(state: state, appIcon: packagedAppIcon())
+    }
+
+    init(state: TrayMenuState, appIcon: NSImage?) {
         source = FakeTraySource(state: state)
         controller = TrayMenuController(
             source: source,
@@ -498,7 +502,8 @@ func testFirstOpenHasNonemptyMenuAndVisibleStatusIcon() {
     let opaquePixels = renderedOpaquePixelCount(image)
     expect(opaquePixels > 0, "status icon must render nontransparent pixels (got \(opaquePixels))")
 
-    expectEqual(button.title, harness.source.menuBarTitle, "status button title")
+    expectEqual(button.title, "", "status button does not draw a duplicate title")
+    expectEqual(harness.controller.statusLabelView.text, harness.source.menuBarTitle, "status label text")
     expectEqual(
         button.toolTip,
         "Codex Reset Tray — \(harness.source.menuBarTitle). Left-click for details, right-click for actions.",
@@ -733,7 +738,7 @@ func testMenuBarUsageToggleOffscreen() async {
     expect(toggle.target === harness.controller, "toggle must target the controller")
     expect(toggle.action != nil, "toggle must have an action selector")
     expect(toggle.toolTip?.contains("icon remains visible") == true, "hide tooltip")
-    expectEqual(harness.statusItem.button.title, "7d 63%", "usage text starts visible")
+    expectEqual(harness.controller.statusLabelView.text, "7d 63%", "usage text starts visible")
 
     // Mark the menu open so the action exercises the in-place update path used
     // while the real menu is being tracked.
@@ -752,7 +757,7 @@ func testMenuBarUsageToggleOffscreen() async {
     // Exercise the real NSMenu action dispatch path with a checked native item.
     harness.menu.performActionForItem(at: index)
     expectEqual(harness.source.showsUsageInMenuBar, false, "toggle must hide usage text")
-    expectEqual(harness.statusItem.button.title, "", "hidden state must clear the menu-bar text")
+    expectEqual(harness.controller.statusLabelView.text, "", "hidden state must clear the menu-bar text")
     expectEqual(toggle.title, "Show 7d Label", "checked item must switch to the show action")
     expectEqual(toggle.state, .off, "hidden state must clear the native check mark")
     expect(toggle.toolTip?.contains("icon is always visible") == true, "show tooltip")
@@ -779,7 +784,7 @@ func testMenuBarUsageToggleOffscreen() async {
 
     harness.menu.performActionForItem(at: index)
     expectEqual(harness.source.showsUsageInMenuBar, true, "second toggle must show usage text")
-    expectEqual(harness.statusItem.button.title, "7d 63%", "menu-bar text must return")
+    expectEqual(harness.controller.statusLabelView.text, "7d 63%", "menu-bar text must return")
     expectEqual(toggle.title, "Hide 7d Label", "unchecked item must switch back to the hide action")
     expectEqual(toggle.state, .on, "shown state must restore the native check mark")
     expect(harness.statusItem.isVisible, "status item must remain visible after showing text again")
