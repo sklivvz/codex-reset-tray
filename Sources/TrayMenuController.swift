@@ -47,6 +47,17 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
     private var cancellable: AnyCancellable?
     private var statusEventMonitor: Any?
     private var isMenuOpen = false
+    /// A native actions menu requested by a right/control click. `NSPopover.close()`
+    /// only starts the close, so presentation stays pending until the info
+    /// surface reports hidden or the bounded deadline expires.
+    private struct PendingActionsMenuRequest {
+        let id: UInt64
+        let deadline: Date
+    }
+    private var pendingActionsMenuRequest: PendingActionsMenuRequest?
+    private var nextActionsMenuRequestID: UInt64 = 0
+    private var popoverCloseObserver: NSObjectProtocol?
+    private static let actionsMenuPresentationTimeout: TimeInterval = 2.0
     /// Whether the transient popover was shown when the current status-button
     /// left-click began. `.transient` can close it before the mouse-up action
     /// runs, so the action must still treat that click as the closing half of
@@ -101,6 +112,19 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
             "Configuration and actions. Usage and forecast details are in the "
                 + "left-click information popover."
         )
+
+        // `close()` can finish after the click event returns. Observe the real
+        // close notification so a pending right/control-click menu is shown as
+        // soon as the popover is gone instead of waiting for the next poll.
+        popoverCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSPopover.didCloseNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.presentPendingActionsMenuIfReady()
+            }
+        }
 
         statusItem.isVisible = true
 
@@ -158,6 +182,9 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         if let statusEventMonitor {
             NSEvent.removeMonitor(statusEventMonitor)
         }
+        if let popoverCloseObserver {
+            NotificationCenter.default.removeObserver(popoverCloseObserver)
+        }
     }
 
     /// Whether the information popover is currently shown.
@@ -197,14 +224,56 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
     }
 
     private func showActionsMenu() {
-        guard !isMenuOpen else { return }
-        // Dismiss the information surface before native menu tracking starts,
-        // so a right-click cannot leave the transient popover above the menu.
-        // Hide unconditionally: the presenter force-closes any existing
-        // popover, including one whose close was previously only attempted.
-        infoPresenter.hide()
+        guard !isMenuOpen, pendingActionsMenuRequest == nil else { return }
+        nextActionsMenuRequestID &+= 1
+        let request = PendingActionsMenuRequest(
+            id: nextActionsMenuRequestID,
+            deadline: Date().addingTimeInterval(Self.actionsMenuPresentationTimeout)
+        )
+        pendingActionsMenuRequest = request
+        // `hide()` force-closes the popover, but `close()` only starts the
+        // close. Do not rely on `isShown` becoming false before this click
+        // returns; the presentation below waits for that to actually happen.
+        if infoPresenter.isShown {
+            infoPresenter.hide()
+        }
         // Rebuild now: menuNeedsUpdate is not guaranteed to run before the
         // first tracking pass of a menu that is attached on demand.
+        apply(TrayMenuModel.make(state: source.menuState))
+        // Never pop up the menu from inside the status-button mouse-down event
+        // monitor. Returning to the run loop first lets the close complete and
+        // avoids entering menu tracking reentrantly from event dispatch.
+        DispatchQueue.main.async { [weak self] in
+            self?.presentPendingActionsMenuIfReady(id: request.id)
+        }
+    }
+
+    private func presentPendingActionsMenuIfReady() {
+        guard let request = pendingActionsMenuRequest else { return }
+        presentPendingActionsMenuIfReady(id: request.id)
+    }
+
+    private func presentPendingActionsMenuIfReady(id: UInt64) {
+        guard let request = pendingActionsMenuRequest,
+              request.id == id,
+              !isMenuOpen else {
+            return
+        }
+        guard !infoPresenter.isShown else {
+            // The popover is still on screen even though close was requested.
+            // Keep checking on later run-loop turns, bounded so a wedged close
+            // cannot open a menu above the popover or hang the click forever.
+            guard Date() < request.deadline else {
+                pendingActionsMenuRequest = nil
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in
+                self?.presentPendingActionsMenuIfReady(id: id)
+            }
+            return
+        }
+        pendingActionsMenuRequest = nil
+        // Re-read the source because the close may have taken several turns.
         apply(TrayMenuModel.make(state: source.menuState))
         statusItem.popUp(menu)
     }
@@ -261,6 +330,9 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         isMenuOpen = true
+        // If another path opened a menu while a deferred request was pending,
+        // that request is now satisfied and must not open a second menu later.
+        pendingActionsMenuRequest = nil
         // Preserve forecast-on-click behavior: the store debounces these fetches.
         source.menuDidOpen()
     }

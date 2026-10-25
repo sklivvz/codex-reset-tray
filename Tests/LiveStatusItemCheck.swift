@@ -209,24 +209,24 @@ private func performLiveStatusItemChecks(
             "right click: menuWillOpen probe sees info popover shown=\(info.isShown)"
         )
     }
-    guard let rightClick = statusMouseEvent(
-        .rightMouseDown,
-        button: button,
-        window: window
-    ) else {
+    // NSMenu.popUp enters a tracking loop; the guard cancels every open so
+    // this check cannot wait for a human click or a stray second tracking pass.
+    let menuOpensBeforeRightClick = source.menuDidOpenCount
+    rightClickGuard.arm()
+    writeLiveStatus("right click: posting right mouse-down")
+    guard postRightClick(application, button: button, window: window) else {
         rightClickGuard.disarm()
         source.onMenuDidOpen = nil
         expect(false, "real status-item right-click event must be constructible")
         return
     }
-    // NSMenu.popUp enters a tracking loop; the guard cancels every open so
-    // this check cannot wait for a human click or a stray second tracking pass.
-    let menuOpensBeforeRightClick = source.menuDidOpenCount
-    rightClickGuard.arm()
-    writeLiveStatus("right click: dispatching right mouse-down")
-    withExtendedLifetime(controller) { application.sendEvent(rightClick) }
+    writeLiveStatus("right click: mouse-down posted; waiting for the actions menu")
+    await waitForLiveCondition(timeout: 3, "right-click opens the actions menu") {
+        rightClickGuard.menuWillOpenCount > 0
+            && source.menuDidOpenCount == menuOpensBeforeRightClick + 1
+    }
     writeLiveStatus(
-        "right click: dispatch returned; menuDidOpenCount=\(source.menuDidOpenCount)"
+        "right click: menu opened; menuDidOpenCount=\(source.menuDidOpenCount)"
     )
     rightClickGuard.disarm()
     source.onMenuDidOpen = nil
@@ -273,8 +273,9 @@ private func performLiveStatusItemChecks(
     expect(menu.items.contains { $0.title == "Quit Codex Reset Tray" },
            "opened actions menu must contain Quit")
 
-    // Separately send a control-left click through NSApplication dispatch. It
-    // must take the secondary route, open the menu, and never show a popover.
+    // Separately post a control-left mouse-down through NSApplication's event
+    // queue. It must take the secondary route, open the menu, and never show a
+    // popover.
     writeLiveStatus("control-left click: preparing; info popover shown=\(info.isShown)")
     expect(!info.isShown, "control-left check must start with the info popover hidden")
     var popoverShownWhenControlMenuOpened: Bool?
@@ -291,21 +292,23 @@ private func performLiveStatusItemChecks(
     }
     let menuOpensBeforeControlClick = source.menuDidOpenCount
     controlClickGuard.arm()
-    writeLiveStatus("control-left click: dispatching control-left down with queued mouse-up")
-    let controlClickConstructed = sendControlLeftClick(
-        application,
-        button: button,
-        window: window
-    )
-    writeLiveStatus(
-        "control-left click: dispatch returned; menuDidOpenCount=\(source.menuDidOpenCount)"
-    )
-    controlClickGuard.disarm()
-    source.onMenuDidOpen = nil
-    guard controlClickConstructed else {
+    writeLiveStatus("control-left click: posting control-left mouse-down")
+    guard postControlLeftClick(application, button: button, window: window) else {
+        controlClickGuard.disarm()
+        source.onMenuDidOpen = nil
         expect(false, "real status-item control-left click event must be constructible")
         return
     }
+    writeLiveStatus("control-left click: mouse-down posted; waiting for the actions menu")
+    await waitForLiveCondition(timeout: 3, "control-left click opens the actions menu") {
+        controlClickGuard.menuWillOpenCount > 0
+            && source.menuDidOpenCount == menuOpensBeforeControlClick + 1
+    }
+    writeLiveStatus(
+        "control-left click: menu opened; menuDidOpenCount=\(source.menuDidOpenCount)"
+    )
+    controlClickGuard.disarm()
+    source.onMenuDidOpen = nil
     expectEqual(
         source.menuDidOpenCount,
         menuOpensBeforeControlClick + 1,
@@ -606,35 +609,62 @@ private func sendLeftClick(
     return true
 }
 
-/// Sends the control-left down that the local event monitor must classify as a
-/// secondary click. The matching up is queued before the down so native menu
-/// tracking observes and consumes it; delivering the up only after tracking
-/// returns could produce a second control-click action and reopen the menu.
+/// Posts the right mouse-down that the local event monitor must route to the
+/// actions menu. The menu opens asynchronously after `close()` finishes, so the
+/// caller waits for the `menuWillOpen` stage callback instead of expecting
+/// `postEvent` to block.
 @MainActor
-private func sendControlLeftClick(
+private func postRightClick(
     _ application: NSApplication,
     button: NSStatusBarButton,
     window: NSWindow
 ) -> Bool {
-    guard let down = statusMouseEvent(
-        .leftMouseDown,
-        modifiers: [.control],
+    postStatusMouseDown(
+        .rightMouseDown,
+        application: application,
         button: button,
         window: window
-    ), let up = statusMouseEvent(
-        .leftMouseUp,
+    )
+}
+
+/// Posts the control-left down that the local event monitor must classify as a
+/// secondary click. `NSApplication.run()` delivers it on the main event loop;
+/// calling `sendEvent` from the checks task would enter menu tracking
+/// synchronously and reentrantly. The down is the event that decides the route,
+/// so it is posted alone: a separate up queued before the deferred menu would
+/// be delivered as an unpaired button-up and could start a second action.
+@MainActor
+private func postControlLeftClick(
+    _ application: NSApplication,
+    button: NSStatusBarButton,
+    window: NSWindow
+) -> Bool {
+    postStatusMouseDown(
+        .leftMouseDown,
         modifiers: [.control],
+        application: application,
+        button: button,
+        window: window
+    )
+}
+
+@MainActor
+private func postStatusMouseDown(
+    _ type: NSEvent.EventType,
+    modifiers: NSEvent.ModifierFlags = [],
+    application: NSApplication,
+    button: NSStatusBarButton,
+    window: NSWindow
+) -> Bool {
+    guard let down = statusMouseEvent(
+        type,
+        modifiers: modifiers,
         button: button,
         window: window
     ) else {
         return false
     }
-    application.postEvent(up, atStart: false)
-    application.sendEvent(down)
-    // Menu tracking normally consumes that synthetic up. Drop any copy it did
-    // not consume so it cannot be delivered to the status button later, after
-    // the menu-tracking guard has been disarmed.
-    application.discardEvents(matching: .leftMouseUp, before: nil)
+    application.postEvent(down, atStart: false)
     return true
 }
 

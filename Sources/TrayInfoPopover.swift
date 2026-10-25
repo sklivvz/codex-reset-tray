@@ -261,8 +261,9 @@ final class TrayInfoPopoverPresenter: TrayInfoPresenting {
         guard let popover else { return }
         // `performClose(_:)` only attempts to close and can decline when the
         // popover hosts a nested popover or its window is a child window.
-        // `close()` is the force-close path, so the info surface is gone before
-        // the controller starts native menu tracking for a right/control-click.
+        // `close()` is the force-close path; it starts the close asynchronously,
+        // so the controller waits for `isShown` to become false (woken by
+        // `NSPopover.didCloseNotification`) before presenting a menu.
         popover.close()
     }
 

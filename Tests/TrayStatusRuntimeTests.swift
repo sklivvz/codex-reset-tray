@@ -395,6 +395,9 @@ func testLeftClickOpensInfoPopoverAndRightClickOpensMenu() async {
         popoverShownWhenMenuPopped = harness.info.isShown
     }
     harness.click(.rightMouseUp)
+    // The controller defers popUp until the info surface reports closed, so
+    // let the main queue run the presentation attempt before asserting.
+    await flushMainQueue()
     expectEqual(harness.statusItem.poppedMenus.count, 1, "right click must open the menu once")
     expect(harness.statusItem.poppedMenus.first === harness.menu, "right click opens the actions menu")
     expect(
@@ -424,6 +427,7 @@ func testLeftClickOpensInfoPopoverAndRightClickOpensMenu() async {
         popoverShownWhenControlMenuPopped = harness.info.isShown
     }
     harness.click(.leftMouseUp, modifiers: [.control])
+    await flushMainQueue()
     expectEqual(harness.statusItem.poppedMenus.count, 2, "control-click must open the menu")
     expect(
         popoverShownWhenControlMenuPopped == false,
@@ -463,7 +467,7 @@ func testLeftClickOpensInfoPopoverAndRightClickOpensMenu() async {
 }
 
 @MainActor
-func testSecondaryEventHitTesting() {
+func testSecondaryEventHitTesting() async {
     let harness = Harness(state: populatedState())
     let cases: [(NSEvent.EventType, NSEvent.ModifierFlags, Bool, Bool)] = [
         (.rightMouseDown, [], false, true),
@@ -479,6 +483,11 @@ func testSecondaryEventHitTesting() {
         }
         expectEqual(harness.controller.handleStatusMouseDown(event), expected,
                     "only secondary mouse-down inside status button is consumed")
+        if expected {
+            // Menu presentation is deferred until the current mouse-down
+            // dispatch returns; drain each valid request before the next one.
+            await flushMainQueue()
+        }
     }
     if let otherWindow = harness.statusEvent(.rightMouseDown, otherWindow: true) {
         expect(!harness.controller.handleStatusMouseDown(otherWindow),
@@ -486,6 +495,7 @@ func testSecondaryEventHitTesting() {
     } else {
         expect(false, "other-window event must exist")
     }
+    await flushMainQueue()
     expectEqual(harness.statusItem.poppedMenus.count, 2,
                 "only the two valid secondary clicks open menus")
 }
@@ -697,7 +707,7 @@ func runStatusRuntimeTests() async {
     await testHiddenLabelKeepsIconAndRemovesGap()
     testClickClassification()
     await testLeftClickOpensInfoPopoverAndRightClickOpensMenu()
-    testSecondaryEventHitTesting()
+    await testSecondaryEventHitTesting()
     await testRightClickShowsCurrentMenuContent()
     await testInfoPopoverTracksSourceUpdates()
     testInfoViewRendersOffscreen()
