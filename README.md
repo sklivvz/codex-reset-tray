@@ -12,19 +12,16 @@ information popover, but those forecasts are informational and never trigger
 notifications.
 
 
-<img alt="The compact Codex Reset Tray popover showing 24% 7-day Codex usage and 29% / 50% reset forecasts for the next 24 / 48 hours" src="./docs/images/compact-popover.png" style="width: 307px;"/>
+<img alt="The compact v0.2.0 Codex Reset Tray popover showing a 24% 7-day Codex usage meter and large reset forecasts of 29% within 24 hours and 50% within 48 hours" src="./docs/images/compact-popover.png" style="width: 307px;"/>
 
 
 ## Download for macOS
 
-[**Download Codex Reset Tray v0.1.0 — Universal (Apple Silicon + Intel)**](https://github.com/sklivvz/codex-reset-tray/releases/download/v0.1.0/CodexResetTray-v0.1.0-macos-universal.dmg)
+[**Download Codex Reset Tray v0.2.0 — Universal (Apple Silicon + Intel)**](https://github.com/sklivvz/codex-reset-tray/releases/download/v0.2.0/CodexResetTray-v0.2.0-macos-universal.dmg)
 
-- Direct DMG: [`CodexResetTray-v0.1.0-macos-universal.dmg`](https://github.com/sklivvz/codex-reset-tray/releases/download/v0.1.0/CodexResetTray-v0.1.0-macos-universal.dmg)
-- SHA-256: [`CodexResetTray-v0.1.0-macos-universal.dmg.sha256`](https://github.com/sklivvz/codex-reset-tray/releases/download/v0.1.0/CodexResetTray-v0.1.0-macos-universal.dmg.sha256)
+- Direct DMG: [`CodexResetTray-v0.2.0-macos-universal.dmg`](https://github.com/sklivvz/codex-reset-tray/releases/download/v0.2.0/CodexResetTray-v0.2.0-macos-universal.dmg)
+- SHA-256: [`CodexResetTray-v0.2.0-macos-universal.dmg.sha256`](https://github.com/sklivvz/codex-reset-tray/releases/download/v0.2.0/CodexResetTray-v0.2.0-macos-universal.dmg.sha256)
 - All releases: <https://github.com/sklivvz/codex-reset-tray/releases>
-
-The changes described below are in the current source. The v0.1.0 download does
-not include them; the next release is being held for local validation.
 
 The DMG contains `CodexResetTray.app`, an `Applications` shortcut for
 drag-to-install, a short README, `LICENSE`, and `NOTICE`.
@@ -44,7 +41,7 @@ signature/contents are checked by the packaging script; see
 To verify the download:
 
 ```sh
-shasum -a 256 -c CodexResetTray-v0.1.0-macos-universal.dmg.sha256
+shasum -a 256 -c CodexResetTray-v0.2.0-macos-universal.dmg.sha256
 ```
 
 ## Two surfaces: information and actions
@@ -85,10 +82,10 @@ uses gray for status or to de-emphasize information, because it contains none.
 The offscreen AppKit tests exercise both label states, the native check mark,
 the retained icon, persistence across store restarts, the exact compact popover
 content, large forecast-figure typography and side-by-side layout, and the
-absence of the removed usage/footer/version/notification text. They also assert
-that the menu model contains no informational rows. The offscreen suite does not
-exercise the real menu-bar item or observe the screen; the opt-in live check
-below covers those paths.
+absence of the removed usage-section, footer, version, and notification text.
+They also assert that the menu model contains no informational rows. The
+offscreen suite does not exercise the real menu-bar item or observe the screen;
+the opt-in live check below covers those paths.
 
 - **Enable Notifications** is a checked menu action, not popover prose. It is
   checked only when macOS reports `authorized`, `provisional`, or `ephemeral`.
