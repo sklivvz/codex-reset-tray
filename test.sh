@@ -62,6 +62,7 @@ swiftc -swift-version 5 -parse-as-library \
     "$ROOT/Sources/TrayStatusItem.swift" \
     "$ROOT/Tests/TrayMenuRuntimeTests.swift" \
     "$ROOT/Tests/TrayStatusRuntimeTests.swift" \
+    "$ROOT/Tests/LiveStatusItemCheck.swift" \
     -o "$RUNTIME_OUTPUT"
 
 "$RUNTIME_OUTPUT"

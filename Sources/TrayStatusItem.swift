@@ -14,7 +14,7 @@ enum TrayPalette {
 
 /// Which asset a status icon was derived from.
 enum TrayStatusIconSource: Equatable {
-    /// The packaged `AppIcon.icns`, drawn in color (not a template).
+    /// A template mask derived from the packaged `AppIcon.icns` foreground.
     case appIcon
     /// An SF Symbol template, used only when the app icon is unavailable.
     case systemSymbol
@@ -65,8 +65,8 @@ enum TrayStatusIcon {
     }
 
     static func baseImage(appIcon: NSImage?, symbolName: String) -> TrayStatusBaseImage {
-        if let appIcon, appIcon.isValid, appIcon.size.width > 0, appIcon.size.height > 0 {
-            return TrayStatusBaseImage(image: appIcon, source: .appIcon)
+        if let appIcon, let glyph = monochromeGlyph(from: appIcon) {
+            return TrayStatusBaseImage(image: glyph, source: .appIcon)
         }
         if let symbol = NSImage(
             systemSymbolName: symbolName,
@@ -77,8 +77,8 @@ enum TrayStatusIcon {
         return TrayStatusBaseImage(image: drawnFallback(), source: .drawn)
     }
 
-    /// Draws the base image at the left of a canvas sized for icon plus label.
-    /// The app icon keeps its colors; only fallbacks are template images.
+    /// Draws the glyph at the left of a canvas sized for icon plus label.
+    /// AppKit tints the template image for the current menu-bar appearance.
     static func canvasImage(base: TrayStatusBaseImage, canvas: NSSize) -> NSImage {
         let source = base.image
         let target = fit(source.size, in: TrayStatusLayout.iconRect(in: canvas))
@@ -93,8 +93,61 @@ enum TrayStatusIcon {
             )
             return true
         }
-        image.isTemplate = base.source != .appIcon
+        image.isTemplate = true
         return image
+    }
+
+    /// The packaged icon has an opaque blue tile. Using its alpha directly as
+    /// a template would produce a solid square, hiding the white chart/reset
+    /// glyph. The lowest RGB component separates near-white foreground strokes
+    /// from the saturated blue tile; a short ramp retains antialiased edges.
+    private static func monochromeGlyph(from icon: NSImage) -> NSImage? {
+        guard icon.isValid, icon.size.width > 0, icon.size.height > 0,
+              let bitmap = NSBitmapImageRep(
+                  bitmapDataPlanes: nil,
+                  pixelsWide: 72,
+                  pixelsHigh: 72,
+                  bitsPerSample: 8,
+                  samplesPerPixel: 4,
+                  hasAlpha: true,
+                  isPlanar: false,
+                  colorSpaceName: .deviceRGB,
+                  bytesPerRow: 0,
+                  bitsPerPixel: 0
+              ), let context = NSGraphicsContext(bitmapImageRep: bitmap) else {
+            return nil
+        }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        NSColor.clear.setFill()
+        NSRect(x: 0, y: 0, width: 72, height: 72).fill()
+        icon.draw(in: NSRect(x: 0, y: 0, width: 72, height: 72))
+        NSGraphicsContext.restoreGraphicsState()
+
+        guard let bytes = bitmap.bitmapData, bitmap.samplesPerPixel == 4 else { return nil }
+        var visiblePixels = 0
+        for y in 0..<72 {
+            for x in 0..<72 {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else {
+                    continue
+                }
+                let brightness = min(color.redComponent, color.greenComponent, color.blueComponent)
+                let strength = max(0, min(1, (brightness - 0.45) / 0.35))
+                    * color.alphaComponent
+                if strength > 0.01 { visiblePixels += 1 }
+                let offset = y * bitmap.bytesPerRow + x * 4
+                bytes[offset] = 0
+                bytes[offset + 1] = 0
+                bytes[offset + 2] = 0
+                bytes[offset + 3] = UInt8((strength * 255).rounded())
+            }
+        }
+        guard visiblePixels > 0 else { return nil }
+        bitmap.size = NSSize(width: TrayStatusLayout.iconSide, height: TrayStatusLayout.iconSide)
+        let glyph = NSImage(size: bitmap.size)
+        glyph.addRepresentation(bitmap)
+        glyph.isTemplate = true
+        return glyph
     }
 
     private static func fit(_ size: NSSize, in rect: NSRect) -> NSRect {
