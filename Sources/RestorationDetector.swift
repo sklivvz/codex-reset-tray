@@ -9,11 +9,22 @@ struct WeeklyUsageBaseline: Codable, Equatable, Sendable {
     var alertedResetsAt: Date?
 }
 
+enum ResetTiming: Equatable, Sendable {
+    /// The previous window reached its scheduled deadline before Codex reported
+    /// the next window.
+    case scheduled
+    /// Codex reported a new window, or a quota restoration, before the previous
+    /// window's deadline.
+    case early
+}
+
 struct RestorationAlert: Equatable, Sendable {
     let previousPercent: Double
     let currentPercent: Double
+    /// The deadline of the window that reset, not the deadline of the new one.
     let resetsAt: Date
     let capturedAt: Date
+    let timing: ResetTiming
     /// Backend permission is reported with the alert but is not required as
     /// evidence that the quota itself was restored.
     let ordinaryUsageAllowed: Bool?
@@ -48,12 +59,14 @@ enum RestorationDetector {
     /// resets when the prior usage was small.
     static let materialDropPoints = 3.0
     static let materialDropFraction = 0.5
-    /// A new reset deadline this far ahead of the prior one is evidence of a new
-    /// window rather than a small backend clock adjustment.
+    /// A reset deadline this far ahead of the prior one is evidence of a new
+    /// window rather than a small backend clock adjustment. A real new window
+    /// advances `resetsAt`, whether it starts at the scheduled deadline or
+    /// early: the next deadline is the new window's start plus its duration.
     static let newWindowAdvance: TimeInterval = 5 * 60
-    /// Do not treat a rollover this close to the scheduled deadline as an early
-    /// restoration. This prevents a backend that rolls the window a few seconds
-    /// early from producing a scheduled-reset notification.
+    /// A window change at or just before the prior deadline is the normal
+    /// scheduled rollover. Codex can roll a window a few seconds early, so use a
+    /// small margin when classifying (not suppressing) the transition.
     static let scheduledResetMargin: TimeInterval = 5 * 60
 
     /// The first successful reading of a launch only establishes current state.
@@ -85,11 +98,9 @@ enum RestorationDetector {
             return RestorationEvaluation(baseline: next, alert: nil)
         }
 
-        // The prior window's deadline is the only schedule used here. A missing
-        // deadline, a reset that is already due or imminent, or an alert already
-        // handled for this window all suppress notification.
+        // A missing prior deadline, no observed usage to restore, or an alert
+        // already scheduled for that window cannot produce another alert.
         guard let deadline = previous.resetsAt,
-              deadline.timeIntervalSince(now) > scheduledResetMargin,
               !isSameDeadline(previous.alertedResetsAt, deadline),
               previous.usedPercent > 0 else {
             return RestorationEvaluation(baseline: next, alert: nil)
@@ -102,15 +113,36 @@ enum RestorationDetector {
             && drop >= nearZeroDropPoints
         let materialDrop = drop >= materialDropPoints
             && relativeDrop >= materialDropFraction
-        // A later deadline while the old deadline is still comfortably in the
-        // future means the backend started a new window early.
+        // A new deadline is direct evidence that a window boundary happened.
+        // This is the only signal that survives when usage has already climbed
+        // again before the next poll, and it is how a normal scheduled rollover
+        // is detected. Requiring the deadline to advance avoids treating a
+        // missing deadline or a small backend timestamp correction as a reset.
         let deadlineAdvanced = current.resetsAt.map {
             $0.timeIntervalSince(deadline) >= newWindowAdvance
         } ?? false
+        let atOrPastScheduledDeadline =
+            now.timeIntervalSince(deadline) >= -scheduledResetMargin
+        let scheduledWindowChange = deadlineAdvanced && atOrPastScheduledDeadline
+        let earlyWindowChange = deadlineAdvanced && !atOrPastScheduledDeadline
+        // Some early restorations clear usage without advancing the window
+        // deadline. A material drop to a low reading is still a reset signal.
+        let usageRestoration = currentIsLow && (materialDrop || clearedToNearZero)
 
-        guard currentIsLow,
-              deadlineAdvanced || materialDrop || clearedToNearZero else {
+        guard scheduledWindowChange || earlyWindowChange || usageRestoration else {
             return RestorationEvaluation(baseline: next, alert: nil)
+        }
+
+        // A deadline passing on its own is not enough: there must be a new
+        // window or a usage drop. If the only evidence is a drop, it belongs to
+        // the scheduled reset when the prior deadline has arrived.
+        let timing: ResetTiming
+        if scheduledWindowChange {
+            timing = .scheduled
+        } else if earlyWindowChange {
+            timing = .early
+        } else {
+            timing = atOrPastScheduledDeadline ? .scheduled : .early
         }
 
         return RestorationEvaluation(
@@ -120,6 +152,7 @@ enum RestorationDetector {
                 currentPercent: current.usedPercent,
                 resetsAt: deadline,
                 capturedAt: now,
+                timing: timing,
                 ordinaryUsageAllowed: ordinaryUsageAllowed
             )
         )
