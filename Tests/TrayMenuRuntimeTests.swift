@@ -95,9 +95,38 @@ final class FakeTraySource: ObservableObject, TrayMenuSource {
 @MainActor
 final class FakeStatusItemHost: TrayStatusItemHost {
     var isVisible = false
-    var menu: NSMenu?
     let button = NSButton()
+    /// Menus the controller asked the (fake) status item to show.
+    private(set) var poppedMenus: [NSMenu] = []
     var statusButton: NSButton? { button }
+
+    func popUp(_ menu: NSMenu) {
+        poppedMenus.append(menu)
+    }
+}
+
+/// Stands in for the information window: records what the controller asked it
+/// to do, and never creates or shows an NSWindow.
+@MainActor
+final class FakeInfoPresenter: TrayInfoPresenting {
+    private(set) var isShown = false
+    private(set) var shown: [TrayInfoModel] = []
+    private(set) var updates: [TrayInfoModel] = []
+    private(set) var hideCount = 0
+
+    func show(_ model: TrayInfoModel) {
+        isShown = true
+        shown.append(model)
+    }
+
+    func update(_ model: TrayInfoModel) {
+        updates.append(model)
+    }
+
+    func hide() {
+        isShown = false
+        hideCount += 1
+    }
 }
 
 @MainActor
@@ -105,6 +134,8 @@ final class ActionRecorder {
     var terminatedCount = 0
     var openedURL: URL?
     var copiedText: String?
+    /// The event `NSApp.currentEvent` would report during a status-item click.
+    var nextEvent: NSEvent?
 }
 
 @MainActor
@@ -113,9 +144,10 @@ final class Harness {
     let statusItem = FakeStatusItemHost()
     let menu = NSMenu()
     let recorder = ActionRecorder()
+    let info = FakeInfoPresenter()
     private(set) var controller: TrayMenuController!
 
-    init(state: TrayMenuState) {
+    init(state: TrayMenuState, appIcon: NSImage? = packagedAppIcon()) {
         source = FakeTraySource(state: state)
         controller = TrayMenuController(
             source: source,
@@ -123,8 +155,19 @@ final class Harness {
             menu: menu,
             terminate: { [recorder] in recorder.terminatedCount += 1 },
             openURL: { [recorder] in recorder.openedURL = $0 },
+            appIconProvider: { appIcon },
+            infoPresenter: info,
+            currentEvent: { [recorder] in recorder.nextEvent },
             writeToPasteboard: { [recorder] in recorder.copiedText = $0 }
         )
+    }
+
+    /// Delivers `type` through the button's real target/action, exactly as the
+    /// status bar button does on a mouse-up.
+    func click(_ type: NSEvent.EventType, modifiers: NSEvent.ModifierFlags = []) {
+        recorder.nextEvent = mouseEvent(type, modifiers: modifiers)
+        let button = statusItem.button
+        _ = button.sendAction(button.action, to: button.target)
     }
 
     var model: TrayMenuModel {
@@ -139,6 +182,32 @@ final class Harness {
         guard let index = index(of: role) else { return nil }
         return menu.items[index]
     }
+}
+
+/// The packaged icon, read from the same `Resources/AppIcon.icns` that
+/// build.sh copies into the app bundle.
+let packagedAppIconURL = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .appendingPathComponent("Resources/AppIcon.icns")
+
+@MainActor
+func packagedAppIcon() -> NSImage? {
+    NSImage(contentsOf: packagedAppIconURL)
+}
+
+func mouseEvent(_ type: NSEvent.EventType, modifiers: NSEvent.ModifierFlags = []) -> NSEvent? {
+    NSEvent.mouseEvent(
+        with: type,
+        location: .zero,
+        modifierFlags: modifiers,
+        timestamp: 0,
+        windowNumber: 0,
+        context: nil,
+        eventNumber: 0,
+        clickCount: 1,
+        pressure: 1
+    )
 }
 
 @MainActor
@@ -362,8 +431,8 @@ func assertMenuMatchesModel(_ harness: Harness, _ label: String) {
                 effectiveRange: nil
             ) as? NSColor
             expect(
-                colorsEqual(color, .systemOrange),
-                "\(label): error row \(index) must render with the orange error color"
+                colorsEqual(color, TrayPalette.error),
+                "\(label): error row \(index) must render with the readable error color"
             )
         case .normal:
             if expected.role == .heading {
@@ -388,7 +457,7 @@ func testFirstOpenHasNonemptyMenuAndVisibleStatusIcon() {
     let harness = Harness(state: TrayMenuState())
 
     expect(harness.statusItem.isVisible, "status item host must be made visible")
-    expect(harness.statusItem.menu === harness.menu, "status item must own the controller menu")
+    expect(harness.statusItem.poppedMenus.isEmpty, "the menu must not open without a right click")
     expect(harness.menu.delegate === harness.controller, "controller must be the menu delegate")
     expectEqual(harness.menu.accessibilityLabel(), "Codex Reset Tray menu", "menu accessibility label")
     expect(!harness.menu.autoenablesItems, "the controller owns item enablement")
@@ -423,7 +492,8 @@ func testFirstOpenHasNonemptyMenuAndVisibleStatusIcon() {
     }
 
     expect(image.size.width > 0 && image.size.height > 0, "status icon must have a visible size")
-    expect(image.isTemplate, "status icon must be a template image")
+    expect(!image.isTemplate, "the app-icon status image keeps its colors")
+    expectEqual(harness.controller.statusIconSource, .appIcon, "status icon source")
     expect(image.tiffRepresentation?.isEmpty == false, "status icon must contain image data")
     let opaquePixels = renderedOpaquePixelCount(image)
     expect(opaquePixels > 0, "status icon must render nontransparent pixels (got \(opaquePixels))")
@@ -431,7 +501,7 @@ func testFirstOpenHasNonemptyMenuAndVisibleStatusIcon() {
     expectEqual(button.title, harness.source.menuBarTitle, "status button title")
     expectEqual(
         button.toolTip,
-        "Codex Reset Tray — \(harness.source.menuBarTitle). Click for usage, forecast, and actions.",
+        "Codex Reset Tray — \(harness.source.menuBarTitle). Left-click for details, right-click for actions.",
         "status tooltip"
     )
     expectEqual(
@@ -441,11 +511,13 @@ func testFirstOpenHasNonemptyMenuAndVisibleStatusIcon() {
     )
     expectEqual(
         button.accessibilityHelp(),
-        "Open the Codex Reset Tray menu.",
+        "Click to show Codex usage details. Right-click to open the actions menu.",
         "status accessibility help"
     )
-    expectEqual(button.imagePosition, .imageLeading, "status image position")
-    expectEqual(button.imageScaling, .scaleProportionallyDown, "status image scaling")
+    expect(button.target === harness.controller, "status button must target the controller")
+    expect(button.action != nil, "status button must have a click action")
+    expectEqual(button.imagePosition, .imageOnly, "status image position")
+    expectEqual(button.imageScaling, .scaleNone, "status image scaling")
     expectEqual(button.font?.pointSize, 11, "status font size")
 }
 
@@ -506,7 +578,7 @@ func testErrorRows() {
     assertMenuMatchesModel(codexHarness, "codex error")
     let codexStatus = codexHarness.item(for: .codexStatus)
     expect(codexStatus?.title.contains("Codex error: \(codexMessage)") == true, "Codex error row title")
-    expect(codexStatus?.isEnabled == false, "Codex error row is informational")
+    expect(codexStatus?.isEnabled == true, "Codex error row must not be grayed out")
     expect(
         codexHarness.item(for: .codexWindows)?.title.contains("63%") == true,
         "last known usage remains visible beside a Codex error"
@@ -526,7 +598,7 @@ func testErrorRows() {
         forecastSummary?.title.contains("Forecast error: \(forecastMessage)") == true,
         "forecast error row title"
     )
-    expect(forecastSummary?.isEnabled == false, "forecast error row is informational")
+    expect(forecastSummary?.isEnabled == true, "forecast error row must not be grayed out")
     expect(
         forecastHarness.item(for: .action(.quit))?.isEnabled == true,
         "Quit remains enabled in a forecast error state"
@@ -649,17 +721,23 @@ func testMenuBarUsageToggleOffscreen() async {
     let harness = Harness(state: populatedState())
     guard let index = harness.index(of: .action(.toggleMenuBarUsage)),
           let toggle = harness.item(for: .action(.toggleMenuBarUsage)) else {
-        expect(false, "Show Usage in Menu Bar row must exist")
+        expect(false, "7d label toggle row must exist")
         return
     }
 
-    expectEqual(toggle.title, "Show Usage in Menu Bar", "toggle title")
+    expectEqual(index, 1, "7d label toggle must be directly below the heading")
+    expectEqual(toggle.title, "Hide 7d Label", "toggle title")
     expect(toggle.isEnabled, "toggle must be enabled")
-    expectEqual(toggle.state, .on, "usage text must be checked by default")
+    expectEqual(toggle.state, .on, "usage label must be checked by default")
     expectEqual(toggle.keyEquivalent, "", "toggle must not have a shortcut")
     expect(toggle.target === harness.controller, "toggle must target the controller")
     expect(toggle.action != nil, "toggle must have an action selector")
+    expect(toggle.toolTip?.contains("icon remains visible") == true, "hide tooltip")
     expectEqual(harness.statusItem.button.title, "7d 63%", "usage text starts visible")
+
+    // Mark the menu open so the action exercises the in-place update path used
+    // while the real menu is being tracked.
+    harness.controller.menuWillOpen(harness.menu)
 
     guard let visibleImage = harness.statusItem.button.image else {
         expect(false, "visible state must have a menu-bar icon")
@@ -675,35 +753,35 @@ func testMenuBarUsageToggleOffscreen() async {
     harness.menu.performActionForItem(at: index)
     expectEqual(harness.source.showsUsageInMenuBar, false, "toggle must hide usage text")
     expectEqual(harness.statusItem.button.title, "", "hidden state must clear the menu-bar text")
-    expectEqual(
-        harness.item(for: .action(.toggleMenuBarUsage))?.state,
-        .off,
-        "hidden state must clear the native check mark"
-    )
+    expectEqual(toggle.title, "Show 7d Label", "checked item must switch to the show action")
+    expectEqual(toggle.state, .off, "hidden state must clear the native check mark")
+    expect(toggle.toolTip?.contains("icon is always visible") == true, "show tooltip")
     expect(harness.statusItem.isVisible, "status item must remain visible when text is hidden")
     guard let hiddenImage = harness.statusItem.button.image else {
         expect(false, "hidden state must keep the menu-bar icon")
         return
     }
-    expect(hiddenImage.isTemplate, "hidden state icon must remain a template image")
+    expect(!hiddenImage.isTemplate, "hidden state icon must keep the app icon colors")
+    expectEqual(
+        hiddenImage.size,
+        NSSize(width: TrayStatusLayout.iconSide, height: TrayStatusLayout.iconSide),
+        "hidden state canvas must be the icon alone"
+    )
     expect(
         renderedOpaquePixelCount(hiddenImage) > 0,
         "hidden state icon must still render nontransparent pixels"
     )
     expectEqual(
         harness.statusItem.button.toolTip,
-        "Codex Reset Tray — usage text hidden in the menu bar. Click for usage, forecast, and actions.",
+        "Codex Reset Tray — usage text hidden in the menu bar. Left-click for details, right-click for actions.",
         "hidden state tooltip"
     )
 
     harness.menu.performActionForItem(at: index)
     expectEqual(harness.source.showsUsageInMenuBar, true, "second toggle must show usage text")
     expectEqual(harness.statusItem.button.title, "7d 63%", "menu-bar text must return")
-    expectEqual(
-        harness.item(for: .action(.toggleMenuBarUsage))?.state,
-        .on,
-        "shown state must restore the native check mark"
-    )
+    expectEqual(toggle.title, "Hide 7d Label", "unchecked item must switch back to the hide action")
+    expectEqual(toggle.state, .on, "shown state must restore the native check mark")
     expect(harness.statusItem.isVisible, "status item must remain visible after showing text again")
     guard let restoredImage = harness.statusItem.button.image else {
         expect(false, "restored state must keep the menu-bar icon")
@@ -1097,6 +1175,7 @@ struct TrayMenuRuntimeTests {
         await testStartupHistoricalStateDoesNotAlert()
         await testAuthorizationRequestErrorIsVisible()
         await testAlertMarkerSurvivesRestart()
+        await runStatusRuntimeTests()
 
         expect(!application.isRunning, "tests must leave the application unlaunched")
         expect(application.windows.isEmpty, "tests must not create windows")
@@ -1109,8 +1188,9 @@ struct TrayMenuRuntimeTests {
         }
         print("Tray menu AppKit runtime integration tests passed")
         print(
-            "Scope: offscreen NSMenu/NSMenuItem wiring with a non-running NSApplication; "
-                + "no NSStatusItem, click, window, or screen observation."
+            "Scope: offscreen NSMenu/NSMenuItem wiring, synthetic click events, and an "
+                + "offscreen info view with a non-running NSApplication; "
+                + "no NSStatusItem, window, or screen observation."
         )
     }
 }

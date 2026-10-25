@@ -24,8 +24,9 @@ Security > Open Anyway**.
 
 ## Menu bar
 
-The bar-chart icon is always visible. Use the native checked **Show Usage in Menu
-Bar** item to show or hide the `7d 89%` usage text. The preference is saved in
+The app icon is always visible. Left-click it for the information window and
+right-click it for the actions menu. Use the native checked **Hide 7d Label** /
+**Show 7d Label** item to hide or show the `7d 89%` usage text. The preference is saved in
 `UserDefaults` and defaults to visible.
 
 The DMG packaging script attaches the image read-only during validation, checks

@@ -1,0 +1,261 @@
+import AppKit
+
+/// The information window's content. It is a plain `NSView`, so tests can build
+/// it, feed it models, and inspect or render it without ever creating a window.
+@MainActor
+final class TrayInfoView: NSView {
+    static let contentWidth: CGFloat = 380
+    private static let inset: CGFloat = 20
+
+    private let iconView = NSImageView()
+    private let titleField = TrayInfoView.makeLabel(size: 15, weight: .semibold)
+    private let versionField = TrayInfoView.makeLabel(size: 11, weight: .regular)
+    private let usageValueField = TrayInfoView.makeLabel(size: 34, weight: .semibold, monospacedDigits: true)
+    private let usageCaptionField = TrayInfoView.makeLabel(size: 12, weight: .regular)
+    private let meter = NSProgressIndicator()
+    private let sectionsStack = NSStackView()
+    private let footerStack = NSStackView()
+    private(set) var model: TrayInfoModel?
+    private(set) var updateCount = 0
+
+    init(appIcon: NSImage?) {
+        super.init(frame: .zero)
+
+        iconView.image = appIcon
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        iconView.setAccessibilityElement(false)
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            iconView.widthAnchor.constraint(equalToConstant: 44),
+            iconView.heightAnchor.constraint(equalToConstant: 44),
+        ])
+
+        let titles = NSStackView(views: [titleField, versionField])
+        titles.orientation = .vertical
+        titles.alignment = .leading
+        titles.spacing = 2
+
+        let header = NSStackView(views: [iconView, titles])
+        header.orientation = .horizontal
+        header.alignment = .centerY
+        header.spacing = 12
+
+        meter.style = .bar
+        meter.isIndeterminate = false
+        meter.minValue = 0
+        meter.maxValue = 1
+        meter.translatesAutoresizingMaskIntoConstraints = false
+
+        let usage = NSStackView(views: [usageValueField, usageCaptionField, meter])
+        usage.orientation = .vertical
+        usage.alignment = .leading
+        usage.spacing = 4
+        usage.setCustomSpacing(8, after: usageCaptionField)
+
+        sectionsStack.orientation = .vertical
+        sectionsStack.alignment = .leading
+        sectionsStack.spacing = 14
+
+        footerStack.orientation = .vertical
+        footerStack.alignment = .leading
+        footerStack.spacing = 2
+
+        let root = NSStackView(views: [header, usage, sectionsStack, footerStack])
+        root.orientation = .vertical
+        root.alignment = .leading
+        root.spacing = 16
+        root.edgeInsets = NSEdgeInsets(
+            top: Self.inset, left: Self.inset, bottom: Self.inset, right: Self.inset
+        )
+        root.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(root)
+
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: Self.contentWidth),
+            root.leadingAnchor.constraint(equalTo: leadingAnchor),
+            root.trailingAnchor.constraint(equalTo: trailingAnchor),
+            root.topAnchor.constraint(equalTo: topAnchor),
+            root.bottomAnchor.constraint(equalTo: bottomAnchor),
+            meter.widthAnchor.constraint(equalTo: usage.widthAnchor),
+        ])
+
+        setAccessibilityLabel("Codex Reset Tray details")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("TrayInfoView is created in code")
+    }
+
+    func update(with model: TrayInfoModel) {
+        self.model = model
+        updateCount += 1
+
+        titleField.stringValue = model.title
+        versionField.stringValue = model.version
+        usageValueField.stringValue = model.usageValue
+        usageCaptionField.stringValue = model.usageCaption
+        if let fraction = model.usageFraction {
+            meter.doubleValue = fraction
+            meter.isHidden = false
+            meter.setAccessibilityLabel("7-day Codex usage")
+            meter.setAccessibilityValueDescription(model.usageValue)
+        } else {
+            meter.isHidden = true
+        }
+
+        replaceArrangedViews(in: sectionsStack, with: model.sections.map(makeSection))
+        replaceArrangedViews(
+            in: footerStack,
+            with: model.footer.map { Self.makeBody($0, tone: .normal, toolTip: nil, size: 11) }
+        )
+        layoutSubtreeIfNeeded()
+    }
+
+    /// The meter's value, or `nil` while it is hidden. Used by offscreen tests.
+    var meterFraction: Double? { meter.isHidden ? nil : meter.doubleValue }
+
+    /// Every text currently shown, in reading order. Used by offscreen tests.
+    var renderedTexts: [String] {
+        var texts: [String] = []
+        collectTexts(in: self, into: &texts)
+        return texts
+    }
+
+    /// The label showing `text`, if any. Used by offscreen tests to check color.
+    func field(showing text: String) -> NSTextField? {
+        findField(in: self) { $0.stringValue == text }
+    }
+
+    private func makeSection(_ section: TrayInfoSection) -> NSView {
+        let heading = Self.makeLabel(size: 12, weight: .semibold)
+        heading.stringValue = section.title
+        let stack = NSStackView(views: [heading] + section.rows.map {
+            Self.makeBody($0.text, tone: $0.tone, toolTip: $0.toolTip, size: 12)
+        })
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 4
+        return stack
+    }
+
+    private func replaceArrangedViews(in stack: NSStackView, with views: [NSView]) {
+        for view in stack.arrangedSubviews {
+            stack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        for view in views {
+            stack.addArrangedSubview(view)
+        }
+    }
+
+    private func collectTexts(in view: NSView, into texts: inout [String]) {
+        if let field = view as? NSTextField, !field.isHidden, !field.stringValue.isEmpty {
+            texts.append(field.stringValue)
+        }
+        for subview in view.subviews {
+            collectTexts(in: subview, into: &texts)
+        }
+    }
+
+    private func findField(in view: NSView, where match: (NSTextField) -> Bool) -> NSTextField? {
+        if let field = view as? NSTextField, match(field) { return field }
+        for subview in view.subviews {
+            if let found = findField(in: subview, where: match) { return found }
+        }
+        return nil
+    }
+
+    /// Single-line label in the normal label color. Nothing here is secondary
+    /// or disabled gray: every row carries information the user asked to see.
+    private static func makeLabel(
+        size: CGFloat,
+        weight: NSFont.Weight,
+        monospacedDigits: Bool = false
+    ) -> NSTextField {
+        let field = NSTextField(labelWithString: "")
+        field.font = monospacedDigits
+            ? NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight)
+            : NSFont.systemFont(ofSize: size, weight: weight)
+        field.textColor = .labelColor
+        field.lineBreakMode = .byTruncatingTail
+        return field
+    }
+
+    private static func makeBody(
+        _ text: String,
+        tone: TrayMenuTone,
+        toolTip: String?,
+        size: CGFloat
+    ) -> NSTextField {
+        let field = NSTextField(wrappingLabelWithString: text)
+        field.font = NSFont.systemFont(ofSize: size)
+        field.textColor = tone == .error ? TrayPalette.error : .labelColor
+        field.toolTip = toolTip
+        field.preferredMaxLayoutWidth = contentWidth - 2 * inset
+        field.isSelectable = true
+        return field
+    }
+}
+
+/// What the controller needs from whatever shows the information window.
+/// Production uses a real `NSWindow`; tests inject a recorder so no window is
+/// ever created or shown.
+@MainActor
+protocol TrayInfoPresenting: AnyObject {
+    var isShown: Bool { get }
+    func show(_ model: TrayInfoModel)
+    func update(_ model: TrayInfoModel)
+    func hide()
+}
+
+@MainActor
+final class TrayInfoWindowPresenter: TrayInfoPresenting {
+    private let appIconProvider: @MainActor () -> NSImage?
+    private var window: NSWindow?
+    private var view: TrayInfoView?
+
+    init(appIconProvider: @escaping @MainActor () -> NSImage?) {
+        self.appIconProvider = appIconProvider
+    }
+
+    var isShown: Bool { window?.isVisible ?? false }
+
+    func show(_ model: TrayInfoModel) {
+        let (window, view) = ensureWindow()
+        view.update(with: model)
+        window.setContentSize(view.fittingSize)
+        if !window.isVisible {
+            window.center()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func update(_ model: TrayInfoModel) {
+        guard let window, let view, window.isVisible else { return }
+        view.update(with: model)
+        window.setContentSize(view.fittingSize)
+    }
+
+    func hide() {
+        window?.orderOut(nil)
+    }
+
+    private func ensureWindow() -> (NSWindow, TrayInfoView) {
+        if let window, let view { return (window, view) }
+        let view = TrayInfoView(appIcon: appIconProvider())
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: NSSize(width: TrayInfoView.contentWidth, height: 300)),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: true
+        )
+        window.title = "Codex Reset Tray"
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        self.window = window
+        self.view = view
+        return (window, view)
+    }
+}

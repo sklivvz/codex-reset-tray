@@ -21,12 +21,10 @@ protocol TrayMenuSource: AnyObject {
 @MainActor
 protocol TrayStatusItemHost: AnyObject {
     var isVisible: Bool { get set }
-    var menu: NSMenu? { get set }
     var statusButton: NSButton? { get }
-}
-
-extension NSStatusItem: TrayStatusItemHost {
-    var statusButton: NSButton? { button }
+    /// Shows `menu` under the status item, as a right click does. Production
+    /// attaches the menu just long enough to open it; tests only record it.
+    func popUp(_ menu: NSMenu)
 }
 
 extension ResetStore: TrayMenuSource {
@@ -43,8 +41,15 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
     private let terminate: @MainActor () -> Void
     private let openURL: @MainActor (URL) -> Void
     private let writeToPasteboard: @MainActor (String) -> Void
+    private let appIconProvider: @MainActor () -> NSImage?
+    private let currentEvent: @MainActor () -> NSEvent?
+    private let infoPresenter: any TrayInfoPresenting
     private var cancellable: AnyCancellable?
     private var isMenuOpen = false
+    let statusLabelView = TrayStatusLabelView()
+    private var statusLabelLeading: NSLayoutConstraint?
+    /// Which asset the current status icon was derived from.
+    private(set) var statusIconSource: TrayStatusIconSource = .appIcon
 
     /// Production entry point. The only AppKit objects created here are the
     /// system status item and its menu, exactly as before the injectable
@@ -63,6 +68,9 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         menu: NSMenu,
         terminate: @escaping @MainActor () -> Void = { NSApplication.shared.terminate(nil) },
         openURL: @escaping @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) },
+        appIconProvider: @escaping @MainActor () -> NSImage? = { TrayStatusIcon.bundledAppIcon() },
+        infoPresenter: (any TrayInfoPresenting)? = nil,
+        currentEvent: @escaping @MainActor () -> NSEvent? = { NSApp.currentEvent },
         writeToPasteboard: @escaping @MainActor (String) -> Void = { text in
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
@@ -74,6 +82,9 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         self.menu = menu
         self.terminate = terminate
         self.openURL = openURL
+        self.appIconProvider = appIconProvider
+        self.currentEvent = currentEvent
+        self.infoPresenter = infoPresenter ?? TrayInfoWindowPresenter(appIconProvider: appIconProvider)
         self.writeToPasteboard = writeToPasteboard
         super.init()
 
@@ -84,13 +95,31 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         menu.setAccessibilityHelp("Codex usage, forecast, and app actions.")
 
         statusItem.isVisible = true
-        statusItem.menu = menu
 
         if let button = statusItem.statusButton {
-            button.imagePosition = .imageLeading
-            button.imageScaling = .scaleProportionallyDown
-            button.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+            // NSStatusBarButton's own image+title gap is too wide and not
+            // configurable, so the button draws only the icon canvas and the
+            // usage text is a sibling view placed a fixed TrayStatusLayout.labelGap
+            // after the icon. `button.title` still carries the text for tooltips
+            // and tests, but is not drawn with .imageOnly.
+            button.imagePosition = .imageOnly
+            button.imageScaling = .scaleNone
+            button.font = TrayStatusLayout.labelFont
             button.setAccessibilityLabel("Codex Reset Tray")
+            // The status item has no attached menu: a left click opens the
+            // information window and a right click opens the actions menu, so
+            // the button must report both mouse-up events itself.
+            button.target = self
+            button.action = #selector(statusItemClicked)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            statusLabelView.translatesAutoresizingMaskIntoConstraints = false
+            button.addSubview(statusLabelView)
+            let leading = statusLabelView.leadingAnchor.constraint(equalTo: button.centerXAnchor)
+            statusLabelLeading = leading
+            NSLayoutConstraint.activate([
+                leading,
+                statusLabelView.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+            ])
         }
 
         updateStatusButton()
@@ -104,8 +133,51 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
                 guard let self else { return }
                 self.updateStatusButton()
                 self.apply(TrayMenuModel.make(state: self.source.menuState))
+                self.refreshInfoWindow()
             }
         }
+    }
+
+    /// Whether the information window is currently shown.
+    var isInfoWindowShown: Bool { infoPresenter.isShown }
+
+    /// Left click toggles the information window; right click (or
+    /// control-click) opens the actions menu.
+    func handleStatusClick(_ click: TrayStatusClick) {
+        switch click {
+        case .primary:
+            toggleInfoWindow()
+        case .secondary:
+            showActionsMenu()
+        }
+    }
+
+    private func toggleInfoWindow() {
+        if infoPresenter.isShown {
+            infoPresenter.hide()
+            return
+        }
+        // Same forecast-on-click behavior as opening the menu (debounced by
+        // the store), so the window never opens with a stale forecast.
+        source.menuDidOpen()
+        infoPresenter.show(TrayInfoModel.make(state: source.menuState))
+    }
+
+    private func showActionsMenu() {
+        guard !isMenuOpen else { return }
+        // Rebuild now: menuNeedsUpdate is not guaranteed to run before the
+        // first tracking pass of a menu that is attached on demand.
+        apply(TrayMenuModel.make(state: source.menuState))
+        statusItem.popUp(menu)
+    }
+
+    private func refreshInfoWindow() {
+        guard infoPresenter.isShown else { return }
+        infoPresenter.update(TrayInfoModel.make(state: source.menuState))
+    }
+
+    @objc private func statusItemClicked(_ sender: Any?) {
+        handleStatusClick(TrayStatusClick.classify(currentEvent()))
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -130,17 +202,33 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         guard let button = statusItem.statusButton else { return }
         // The image assignment is unconditional: hiding the usage text must
         // never hide the menu-bar icon.
-        button.image = StatusItemIcon.image(symbolName: source.menuBarSystemImage)
-        button.title = source.menuBarTitle
+        let title = source.menuBarTitle
+        let labelWidth = TrayStatusLayout.labelWidth(for: title)
+        let base = TrayStatusIcon.baseImage(
+            appIcon: appIconProvider(),
+            symbolName: source.menuBarSystemImage
+        )
+        statusIconSource = base.source
+        let canvas = TrayStatusLayout.canvasSize(labelWidth: labelWidth)
+        button.image = TrayStatusIcon.canvasImage(base: base, canvas: canvas)
+        button.title = title
+        statusLabelView.text = title
+        statusLabelView.isHidden = title.isEmpty
+        // The button centers the canvas image, so anchor the label relative to
+        // the button's center: canvas left edge + icon width + gap.
+        statusLabelLeading?.constant = -canvas.width / 2
+            + TrayStatusLayout.iconSide + TrayStatusLayout.labelGap
         if source.menuBarTitle.isEmpty {
-            button.toolTip = "Codex Reset Tray — usage text hidden in the menu bar. Click for usage, forecast, and actions."
+            button.toolTip = "Codex Reset Tray — usage text hidden in the menu bar. Left-click for details, right-click for actions."
         } else {
-            button.toolTip = "Codex Reset Tray — \(source.menuBarTitle). Click for usage, forecast, and actions."
+            button.toolTip = "Codex Reset Tray — \(source.menuBarTitle). Left-click for details, right-click for actions."
         }
         button.setAccessibilityLabel(
             TrayMenuModel.accessibilityDescription(for: source.menuState)
         )
-        button.setAccessibilityHelp("Open the Codex Reset Tray menu.")
+        button.setAccessibilityHelp(
+            "Click to show Codex usage details. Right-click to open the actions menu."
+        )
     }
 
     private func apply(_ model: TrayMenuModel) {
@@ -218,7 +306,7 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
                     string: item.title,
                     attributes: [
                         .font: NSFont.menuFont(ofSize: 0),
-                        .foregroundColor: NSColor.systemOrange,
+                        .foregroundColor: TrayPalette.error,
                     ]
                 )
             } else {
@@ -286,44 +374,15 @@ private final class SystemStatusItemHost: TrayStatusItemHost {
         set { item.isVisible = newValue }
     }
 
-    var menu: NSMenu? {
-        get { item.menu }
-        set { item.menu = newValue }
-    }
-
     var statusButton: NSButton? {
         item.button
     }
-}
 
-@MainActor
-private enum StatusItemIcon {
-    static func image(symbolName: String) -> NSImage {
-        if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "Codex Reset Tray") {
-            image.isTemplate = true
-            image.size = NSSize(width: 16, height: 16)
-            return image
-        }
-        return fallbackImage()
-    }
-
-    /// A menu bar icon must not disappear if SF Symbols is unavailable. This
-    /// template image is a small bar chart and is always drawable.
-    private static func fallbackImage() -> NSImage {
-        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
-            NSColor.black.setFill()
-            let barWidth: CGFloat = 3
-            let baseline: CGFloat = 3
-            let heights: [CGFloat] = [5, 9, 13]
-            for (index, height) in heights.enumerated() {
-                let x = 3 + CGFloat(index) * 6
-                let bar = NSRect(x: x, y: baseline, width: barWidth, height: height)
-                NSBezierPath(roundedRect: bar, xRadius: 1, yRadius: 1).fill()
-            }
-            return !rect.isEmpty
-        }
-        image.isTemplate = true
-        image.size = NSSize(width: 18, height: 18)
-        return image
+    func popUp(_ menu: NSMenu) {
+        // Attach the menu only for this click so left clicks keep reaching the
+        // button's action instead of opening the menu.
+        item.menu = menu
+        item.button?.performClick(nil)
+        item.menu = nil
     }
 }

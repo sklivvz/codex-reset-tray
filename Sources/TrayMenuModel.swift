@@ -29,9 +29,17 @@ struct TrayMenuItem: Equatable {
     let role: TrayMenuItemRole
     let title: String
     let tone: TrayMenuTone
+    /// `false` is reserved for controls that are genuinely unavailable (and for
+    /// separators). Informational rows are enabled so they render in the normal
+    /// label color; they are non-interactive because they have no action.
     let isEnabled: Bool
     let toolTip: String?
     var isChecked: Bool = false
+
+    var isAction: Bool {
+        if case .action = role { return true }
+        return false
+    }
 }
 
 struct TrayMenuState: Equatable {
@@ -101,8 +109,20 @@ struct TrayMenuModel: Equatable {
                 role: .heading,
                 title: "Codex Reset Tray",
                 tone: .normal,
-                isEnabled: false,
+                isEnabled: true,
                 toolTip: nil
+            ),
+            // Keep the label toggle immediately below the heading so it is
+            // discoverable without scanning the status, forecast, and actions.
+            TrayMenuItem(
+                role: .action(.toggleMenuBarUsage),
+                title: state.showsUsageInMenuBar ? "Hide 7d Label" : "Show 7d Label",
+                tone: .normal,
+                isEnabled: true,
+                toolTip: state.showsUsageInMenuBar
+                    ? "Hide the 7d usage percentage in the menu bar. The icon remains visible."
+                    : "Show the 7d usage percentage next to the menu bar icon. The icon is always visible.",
+                isChecked: state.showsUsageInMenuBar
             ),
             codexStatusItem(state),
             codexWindowsItem(state),
@@ -132,16 +152,6 @@ struct TrayMenuModel: Equatable {
                 tone: .normal,
                 isEnabled: true,
                 toolTip: "Copy a privacy-safe status summary for a bug report."
-            )
-        )
-        items.append(
-            TrayMenuItem(
-                role: .action(.toggleMenuBarUsage),
-                title: "Show Usage in Menu Bar",
-                tone: .normal,
-                isEnabled: true,
-                toolTip: "Show the 7-day usage text next to the menu bar icon. The icon is always visible.",
-                isChecked: state.showsUsageInMenuBar
             )
         )
         items.append(
@@ -228,7 +238,7 @@ struct TrayMenuModel: Equatable {
                 role: .codexStatus,
                 title: "Codex error: \(error)",
                 tone: .error,
-                isEnabled: false,
+                isEnabled: true,
                 toolTip: nil
             )
         }
@@ -242,7 +252,7 @@ struct TrayMenuModel: Equatable {
                 role: .codexStatus,
                 title: title,
                 tone: .normal,
-                isEnabled: false,
+                isEnabled: true,
                 toolTip: "Codex app-server is the source of truth for usage alerts."
             )
         }
@@ -252,7 +262,7 @@ struct TrayMenuModel: Equatable {
                 role: .codexStatus,
                 title: "Codex returned no 7-day usage window.",
                 tone: .error,
-                isEnabled: false,
+                isEnabled: true,
                 toolTip: nil
             )
         }
@@ -262,7 +272,7 @@ struct TrayMenuModel: Equatable {
                 role: .codexStatus,
                 title: "Codex: reading usage…",
                 tone: .normal,
-                isEnabled: false,
+                isEnabled: true,
                 toolTip: nil
             )
         }
@@ -271,7 +281,7 @@ struct TrayMenuModel: Equatable {
             role: .codexStatus,
             title: "Codex: no usage has been read yet.",
             tone: .normal,
-            isEnabled: false,
+            isEnabled: true,
             toolTip: nil
         )
     }
@@ -282,7 +292,7 @@ struct TrayMenuModel: Equatable {
                 role: .codexWindows,
                 title: state.isPollingCodex ? "Waiting for Codex app-server…" : "Codex usage details are unavailable.",
                 tone: .normal,
-                isEnabled: false,
+                isEnabled: true,
                 toolTip: nil
             )
         }
@@ -298,7 +308,7 @@ struct TrayMenuModel: Equatable {
             role: .codexWindows,
             title: windows.isEmpty ? "No usage windows were reported." : windows.joined(separator: " · "),
             tone: .normal,
-            isEnabled: false,
+            isEnabled: true,
             toolTip: nil
         )
     }
@@ -335,7 +345,7 @@ struct TrayMenuModel: Equatable {
             role: .codexMeta,
             title: title,
             tone: .normal,
-            isEnabled: false,
+            isEnabled: true,
             toolTip: toolTipParts.isEmpty ? nil : toolTipParts.joined(separator: "\n")
         )
     }
@@ -358,7 +368,7 @@ struct TrayMenuModel: Equatable {
                 role: .forecastSummary,
                 title: "Forecast\(freshness): \(forecast.probability24h)% within 24h · \(forecast.probability48h)% within 48h",
                 tone: stale ? .error : .normal,
-                isEnabled: false,
+                isEnabled: true,
                 toolTip: stale ? "\(forecast.forecastSummary)\nLast updated: \(state.lastForecastSuccess.map(dateText) ?? "unknown")" : forecast.forecastSummary
             )
         }
@@ -368,7 +378,7 @@ struct TrayMenuModel: Equatable {
                 role: .forecastSummary,
                 title: "Forecast error: \(error)",
                 tone: .error,
-                isEnabled: false,
+                isEnabled: true,
                 toolTip: nil
             )
         }
@@ -379,7 +389,7 @@ struct TrayMenuModel: Equatable {
                 ? "Forecast: fetching from codexreset.org…"
                 : "Forecast: not loaded yet.",
             tone: .normal,
-            isEnabled: false,
+            isEnabled: true,
             toolTip: "This menu fetches the forecast when it opens."
         )
     }
@@ -391,7 +401,7 @@ struct TrayMenuModel: Equatable {
                     role: .forecastDetail,
                     title: "Forecast refresh failed: \(error)",
                     tone: .error,
-                    isEnabled: false,
+                    isEnabled: true,
                     toolTip: nil
                 )
             }
@@ -407,7 +417,7 @@ struct TrayMenuModel: Equatable {
                 role: .forecastDetail,
                 title: "Latest restoration: \(dateText(forecast.resetAt)) · \(forecast.resetStatus)",
                 tone: .normal,
-                isEnabled: false,
+                isEnabled: true,
                 toolTip: toolTipParts.joined(separator: "\n")
             )
         }
@@ -416,7 +426,7 @@ struct TrayMenuModel: Equatable {
             role: .forecastDetail,
             title: "Site forecasts are informational only and never trigger alerts.",
             tone: .normal,
-            isEnabled: false,
+            isEnabled: true,
             toolTip: nil
         )
     }
@@ -429,7 +439,7 @@ struct TrayMenuModel: Equatable {
         return text
     }
 
-    private static func percent(_ value: Double) -> String {
+    fileprivate static func percent(_ value: Double) -> String {
         "\(Int(value.rounded()))%"
     }
 
@@ -441,7 +451,74 @@ struct TrayMenuModel: Equatable {
         }
     }
 
-    private static func dateText(_ date: Date) -> String {
+    fileprivate static func dateText(_ date: Date) -> String {
         date.formatted(date: .abbreviated, time: .shortened)
+    }
+}
+
+struct TrayInfoRow: Equatable {
+    let text: String
+    let tone: TrayMenuTone
+    let toolTip: String?
+}
+
+struct TrayInfoSection: Equatable {
+    let title: String
+    let rows: [TrayInfoRow]
+}
+
+/// Pure representation of the information window opened by a left click on the
+/// status icon. It is derived from the same `TrayMenuState` and the same row
+/// text as the menu, so the window and the menu can never disagree.
+struct TrayInfoModel: Equatable {
+    let title: String
+    let version: String
+    /// Large headline: the 7-day usage percentage, or "--" when it is unknown.
+    let usageValue: String
+    let usageCaption: String
+    /// 0...1 when a 7-day window is known; `nil` hides the meter.
+    let usageFraction: Double?
+    let sections: [TrayInfoSection]
+    let footer: [String]
+
+    static func make(state: TrayMenuState) -> TrayInfoModel {
+        let menu = TrayMenuModel.make(state: state)
+        func rows(_ roles: [TrayMenuItemRole]) -> [TrayInfoRow] {
+            roles.compactMap { menu.item(withRole: $0) }.map {
+                TrayInfoRow(text: $0.title, tone: $0.tone, toolTip: $0.toolTip)
+            }
+        }
+
+        let weekly = state.snapshot?.weeklyWindow
+        var footer: [String] = []
+        if let lastCheck = state.lastCodexCheck {
+            footer.append("Last Codex check: \(TrayMenuModel.dateText(lastCheck))")
+        }
+        if let lastCheck = state.lastForecastCheck {
+            footer.append("Last forecast check: \(TrayMenuModel.dateText(lastCheck))")
+        }
+        if let notificationStatus = state.notificationStatus {
+            footer.append("Notifications: \(notificationStatus)")
+        }
+        footer.append("Menu bar 7d label: \(state.showsUsageInMenuBar ? "shown" : "hidden")")
+
+        return TrayInfoModel(
+            title: "Codex Reset Tray",
+            version: "Version \(AppBuildInfo.version) (build \(AppBuildInfo.build))",
+            usageValue: weekly.map { TrayMenuModel.percent($0.usedPercent) } ?? "--",
+            usageCaption: weekly == nil ? "7-day Codex usage unavailable" : "7-day Codex usage",
+            usageFraction: weekly.map { min(max($0.usedPercent / 100, 0), 1) },
+            sections: [
+                TrayInfoSection(
+                    title: "Codex usage",
+                    rows: rows([.codexStatus, .codexWindows, .codexMeta])
+                ),
+                TrayInfoSection(
+                    title: "Reset forecast",
+                    rows: rows([.forecastSummary, .forecastDetail])
+                ),
+            ],
+            footer: footer
+        )
     }
 }

@@ -34,6 +34,8 @@ struct TrayMenuTests {
         testMenuBarUsageToggleModel()
         testCopyStatusSummary()
         testAccessibilityDescription()
+        testOnlySeparatorsAreDisabled()
+        testInfoModel()
 
         if menuTestFailures > 0 {
             FileHandle.standardError.write(Data("\(menuTestFailures) menu test assertion(s) failed\n".utf8))
@@ -71,7 +73,11 @@ struct TrayMenuTests {
                 "\(label): Copy Status Summary must be available"
             )
             let toggle = model.item(withRole: .action(.toggleMenuBarUsage))
-            expectEqual(toggle?.title, "Show Usage in Menu Bar", "\(label): menu-bar usage toggle title")
+            expectEqual(
+                toggle?.title,
+                state.showsUsageInMenuBar ? "Hide 7d Label" : "Show 7d Label",
+                "\(label): menu-bar 7d label toggle title"
+            )
             expect(toggle?.isEnabled == true, "\(label): menu-bar usage toggle must be enabled")
             expectEqual(
                 toggle?.isChecked,
@@ -227,18 +233,28 @@ struct TrayMenuTests {
     private static func testMenuBarUsageToggleModel() {
         let shown = TrayMenuModel.make(state: TrayMenuState())
         let shownItem = shown.item(withRole: .action(.toggleMenuBarUsage))
-        expectEqual(shownItem?.title, "Show Usage in Menu Bar", "toggle must use the requested native title")
-        expectEqual(shownItem?.isChecked, true, "usage text is visible by default")
+        expectEqual(shownItem?.title, "Hide 7d Label", "visible label must offer a clear hide action")
+        expectEqual(shownItem?.isChecked, true, "usage label is visible by default")
         expect(shownItem?.isEnabled == true, "toggle must always be enabled")
-        expect(shownItem?.toolTip?.contains("icon is always visible") == true, "toggle tooltip must explain the icon remains")
+        expect(
+            shownItem?.toolTip?.contains("icon remains visible") == true,
+            "hide tooltip must explain the icon remains"
+        )
+        expectEqual(
+            shown.items.dropFirst().first?.role,
+            .action(.toggleMenuBarUsage),
+            "toggle must be directly below the heading so it is prominent"
+        )
 
         let hidden = TrayMenuModel.make(
             state: TrayMenuState(showsUsageInMenuBar: false)
         )
-        expectEqual(
-            hidden.item(withRole: .action(.toggleMenuBarUsage))?.isChecked,
-            false,
-            "hiding usage text must clear the check mark"
+        let hiddenItem = hidden.item(withRole: .action(.toggleMenuBarUsage))
+        expectEqual(hiddenItem?.title, "Show 7d Label", "hidden label must offer a clear show action")
+        expectEqual(hiddenItem?.isChecked, false, "hiding the label must clear the check mark")
+        expect(
+            hiddenItem?.toolTip?.contains("icon is always visible") == true,
+            "show tooltip must explain the icon remains"
         )
 
         // The toggle is independent of usage/forecast failures.
@@ -247,11 +263,10 @@ struct TrayMenuTests {
             forecastError: "codexreset.org returned HTTP 503.",
             showsUsageInMenuBar: false
         )
-        expectEqual(
-            TrayMenuModel.make(state: errorState).item(withRole: .action(.toggleMenuBarUsage))?.isChecked,
-            false,
-            "toggle state must survive error states"
-        )
+        let errorItem = TrayMenuModel.make(state: errorState)
+            .item(withRole: .action(.toggleMenuBarUsage))
+        expectEqual(errorItem?.title, "Show 7d Label", "toggle title must survive error states")
+        expectEqual(errorItem?.isChecked, false, "toggle state must survive error states")
     }
 
     private static func testCopyStatusSummary() {
@@ -296,6 +311,93 @@ struct TrayMenuTests {
         )
         expect(error.contains("usage not loaded"), "accessibility label empty state")
         expect(error.contains("error: Codex app-server is unavailable."), "accessibility label error")
+    }
+
+    private static func testOnlySeparatorsAreDisabled() {
+        // Gray menu text means "disabled". Informational rows (status,
+        // forecast, errors) must stay enabled so they render at full contrast.
+        let states: [(String, TrayMenuState)] = [
+            ("empty", TrayMenuState()),
+            ("polling", TrayMenuState(isPollingCodex: true, isFetchingForecast: true)),
+            ("codex error", TrayMenuState(snapshot: snapshot(), codexError: "Codex unavailable")),
+            ("forecast error", TrayMenuState(forecastError: "HTTP 503")),
+            ("populated", TrayMenuState(snapshot: snapshot(), forecast: forecast())),
+        ]
+        for (label, state) in states {
+            for item in TrayMenuModel.make(state: state).items where item.role != .separator {
+                expect(item.isEnabled, "\(label): '\(item.title)' must not be disabled")
+            }
+        }
+    }
+
+    private static func testInfoModel() {
+        let populated = TrayInfoModel.make(
+            state: TrayMenuState(
+                snapshot: snapshot(),
+                forecast: forecast(),
+                lastCodexCheck: menuTestNow,
+                lastForecastCheck: menuTestNow
+            )
+        )
+        expectEqual(populated.title, "Codex Reset Tray", "info title")
+        expectEqual(populated.usageValue, "63%", "info headline")
+        expectEqual(populated.usageFraction, 0.63, "info meter fraction")
+        expectEqual(populated.sections.map(\.title), ["Codex usage", "Reset forecast"], "info sections")
+
+        // The window shows exactly the menu's row text, so the two never drift.
+        let menu = TrayMenuModel.make(
+            state: TrayMenuState(
+                snapshot: snapshot(),
+                forecast: forecast(),
+                lastCodexCheck: menuTestNow,
+                lastForecastCheck: menuTestNow
+            )
+        )
+        expectEqual(
+            populated.sections[0].rows.map(\.text),
+            [.codexStatus, .codexWindows, .codexMeta].compactMap { menu.item(withRole: $0)?.title },
+            "info Codex rows match the menu"
+        )
+        expectEqual(
+            populated.sections[1].rows.map(\.text),
+            [.forecastSummary, .forecastDetail].compactMap { menu.item(withRole: $0)?.title },
+            "info forecast rows match the menu"
+        )
+        expect(populated.footer.contains { $0.hasPrefix("Last Codex check:") }, "info footer Codex check")
+        expect(populated.footer.contains { $0.hasPrefix("Last forecast check:") }, "info footer forecast check")
+        expect(populated.footer.contains("Menu bar 7d label: shown"), "info footer label state")
+
+        let hidden = TrayInfoModel.make(state: TrayMenuState(showsUsageInMenuBar: false))
+        expect(hidden.footer.contains("Menu bar 7d label: hidden"), "info footer hidden label state")
+        expectEqual(hidden.usageValue, "--", "unknown usage headline")
+        expectEqual(hidden.usageFraction, nil, "unknown usage hides the meter")
+
+        let errors = TrayInfoModel.make(
+            state: TrayMenuState(
+                snapshot: snapshot(),
+                codexError: "Codex unavailable",
+                forecastError: "HTTP 503"
+            )
+        )
+        expectEqual(errors.sections[0].rows.first?.tone, .error, "Codex error row keeps the error tone")
+        expectEqual(errors.sections[1].rows.first?.tone, .error, "forecast error row keeps the error tone")
+        expect(errors.sections[0].rows.first?.text.contains("Codex unavailable") == true, "Codex error text")
+
+        let overflow = TrayInfoModel.make(
+            state: TrayMenuState(
+                snapshot: CodexRateLimitSnapshot(
+                    ordinaryUsageAllowed: true,
+                    primary: nil,
+                    secondary: CodexRateLimitWindow(
+                        usedPercent: 140,
+                        windowDurationMins: 10_080,
+                        resetsAt: nil
+                    ),
+                    observedAt: menuTestNow
+                )
+            )
+        )
+        expectEqual(overflow.usageFraction, 1.0, "meter fraction is clamped")
     }
 
     private static func snapshot() -> CodexRateLimitSnapshot {
