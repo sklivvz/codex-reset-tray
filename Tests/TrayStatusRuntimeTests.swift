@@ -88,8 +88,8 @@ func contrastRatio(
     return (max(fg, bg) + 0.05) / (min(fg, bg) + 0.05)
 }
 
-func rowTitle(_ state: TrayMenuState, _ role: TrayMenuItemRole) -> String {
-    TrayMenuModel.make(state: state).item(withRole: role)?.title ?? "<missing \(role)>"
+func infoText(_ state: TrayMenuState, _ role: TrayInfoRowRole) -> String {
+    TrayInfoModel.make(state: state).row(withRole: role)?.text ?? "<missing \(role)>"
 }
 
 func state(weeklyPercent: Double) -> TrayMenuState {
@@ -132,14 +132,34 @@ func testOnlyUnavailableControlsAreDisabled() {
         for (index, item) in harness.model.items.enumerated() where item.role != .separator {
             expect(
                 harness.menu.items[index].isEnabled,
-                "\(label): row \(index) '\(item.title)' must not be grayed out"
+                "\(label): action \(index) '\(item.title)' must not be grayed out"
+            )
+            expect(
+                harness.menu.items[index].attributedTitle == nil,
+                "\(label): action \(index) must use a plain native title"
             )
         }
-        for role in [TrayMenuItemRole.codexStatus, .codexWindows, .codexMeta, .forecastSummary, .forecastDetail] {
-            expect(
-                harness.item(for: role)?.isEnabled == true,
-                "\(label): \(role) must render in the normal label color"
-            )
+        expect(
+            harness.menu.items.filter { !$0.isSeparatorItem }.allSatisfy { $0.isEnabled },
+            "\(label): every actions-menu row must be enabled"
+        )
+
+        // All informational content remains in the popover model, with normal
+        // or error tones, and is never modeled as a disabled menu row.
+        let info = TrayInfoModel.make(state: state)
+        expectEqual(
+            info.allRows.map(\.role),
+            [.codexStatus, .codexWindows, .codexMeta, .notificationStatus,
+             .forecastSummary, .forecastDetail],
+            "\(label): popover retains all informational rows"
+        )
+        if state.codexError != nil {
+            expectEqual(info.row(withRole: .codexStatus)?.tone, .error,
+                        "\(label): popover retains the Codex error tone")
+        }
+        if state.forecastError != nil {
+            expectEqual(info.row(withRole: .forecastSummary)?.tone, .error,
+                        "\(label): popover retains the forecast error tone")
         }
     }
 }
@@ -368,30 +388,56 @@ func testLeftClickOpensInfoPopoverAndRightClickOpensMenu() async {
     expectEqual(harness.source.menuDidOpenCount, 1, "left click must request a fresh forecast")
     expect(harness.controller.isInfoPopoverShown, "info popover reports shown")
 
-    // A second left click closes it again.
-    harness.click(.leftMouseUp)
-    expectEqual(harness.info.hideCount, 1, "second left click must hide the info popover")
-    expect(!harness.controller.isInfoPopoverShown, "info popover reports hidden")
-    expect(harness.statusItem.poppedMenus.isEmpty, "still no menu")
-
-    // Right click: actions menu, no popover.
+    // Right-click while the popover is open: it must be hidden before the
+    // actions menu is popped, not left visible above native menu tracking.
+    var popoverShownWhenMenuPopped: Bool?
+    harness.statusItem.onPopUp = {
+        popoverShownWhenMenuPopped = harness.info.isShown
+    }
     harness.click(.rightMouseUp)
     expectEqual(harness.statusItem.poppedMenus.count, 1, "right click must open the menu once")
     expect(harness.statusItem.poppedMenus.first === harness.menu, "right click opens the actions menu")
+    expect(
+        popoverShownWhenMenuPopped == false,
+        "right click must hide the info popover before the menu is popped"
+    )
+    expectEqual(harness.info.hideCount, 1, "right click must hide the open info popover")
+    expect(!harness.controller.isInfoPopoverShown, "right click must leave the info popover hidden")
     expectEqual(harness.info.shown.count, 1, "right click must not show the info popover")
     expectEqual(harness.info.anchors.count, 1, "right click must not change the popover anchor")
     assertMenuMatchesModel(harness, "after right click")
+    harness.statusItem.onPopUp = nil
 
-    // Control-click behaves as a right click.
+    // A second left click closes the popover again.
+    harness.click(.leftMouseUp)
+    expectEqual(harness.info.shown.count, 2, "left click must reopen the info popover")
+    harness.click(.leftMouseUp)
+    expectEqual(harness.info.hideCount, 2, "second left click must hide the info popover")
+    expect(!harness.controller.isInfoPopoverShown, "info popover reports hidden")
+    expectEqual(harness.statusItem.poppedMenus.count, 1, "still only the one actions menu")
+    expectEqual(harness.info.shown.count, 2, "second left click must not show the popover again")
+
+    // Control-click through the secondary event handler opens the menu without
+    // presenting or retaining a popover.
+    var popoverShownWhenControlMenuPopped: Bool?
+    harness.statusItem.onPopUp = {
+        popoverShownWhenControlMenuPopped = harness.info.isShown
+    }
     harness.click(.leftMouseUp, modifiers: [.control])
     expectEqual(harness.statusItem.poppedMenus.count, 2, "control-click must open the menu")
-    expectEqual(harness.info.shown.count, 1, "control-click must not show the info popover")
+    expect(
+        popoverShownWhenControlMenuPopped == false,
+        "control-click must not present the info popover before the menu is popped"
+    )
+    expectEqual(harness.info.shown.count, 2, "control-click must not show the info popover")
+    expect(!harness.controller.isInfoPopoverShown, "control-click must leave the info popover hidden")
+    harness.statusItem.onPopUp = nil
 
     // NSPopover.transient closes itself during a status-button mouse-down when
     // the popover is already open. The subsequent mouse-up action must finish
     // the toggle as a hide instead of immediately reopening the popover.
     harness.click(.leftMouseUp)
-    expectEqual(harness.info.shown.count, 2, "third left click must reopen the info popover")
+    expectEqual(harness.info.shown.count, 3, "left click must reopen the info popover")
     guard let primaryDown = harness.statusEvent(.leftMouseDown) else {
         expect(false, "primary mouse-down event must exist")
         return
@@ -400,11 +446,11 @@ func testLeftClickOpensInfoPopoverAndRightClickOpensMenu() async {
            "primary mouse-down must not be consumed as a menu click")
     harness.info.hide()
     harness.click(.leftMouseUp)
-    expectEqual(harness.info.shown.count, 2,
+    expectEqual(harness.info.shown.count, 3,
                 "click that transiently closed the popover must not reopen it")
     expect(!harness.controller.isInfoPopoverShown, "transient close must leave the popover hidden")
     harness.click(.leftMouseUp)
-    expectEqual(harness.info.shown.count, 3, "a later left click must open the info popover again")
+    expectEqual(harness.info.shown.count, 4, "a later left click must open the info popover again")
 
     // Menu operations still work after the new click handling.
     guard let quit = harness.index(of: .action(.quit)) else {
@@ -446,16 +492,23 @@ func testSecondaryEventHitTesting() {
 
 @MainActor
 func testRightClickShowsCurrentMenuContent() async {
-    let harness = Harness(state: TrayMenuState())
-    harness.source.setState(populatedState())
+    let harness = Harness(state: populatedState())
+    harness.source.setState(TrayMenuState(showsUsageInMenuBar: false))
     // No main-queue turn has run, so only the right-click path can have
-    // refreshed the menu.
+    // refreshed the menu. The actions menu reflects the current label setting
+    // and never becomes a second information surface.
     harness.click(.rightMouseUp)
     assertMenuMatchesModel(harness, "right click with pending state")
-    expect(
-        harness.item(for: .codexStatus)?.title.contains("63%") == true,
-        "menu opened by right click must show the latest usage"
+    expectEqual(
+        harness.item(for: .action(.toggleMenuBarUsage))?.title,
+        "Show 7d Label",
+        "menu opened by right click must reflect the latest configuration"
     )
+    for item in harness.menu.items where !item.isSeparatorItem {
+        expect(!item.title.contains("Codex usage"), "right-click menu must not show usage rows")
+        expect(!item.title.contains("Forecast"), "right-click menu must not show forecast rows")
+        expect(!item.title.contains("Notifications"), "right-click menu must not show notification rows")
+    }
     await flushMainQueue()
 }
 
@@ -517,11 +570,12 @@ func testInfoViewRendersOffscreen() {
         "7-day Codex usage",
         "Codex usage",
         "Reset forecast",
-        rowTitle(populated, .codexStatus),
-        rowTitle(populated, .codexWindows),
-        rowTitle(populated, .notificationStatus),
-        rowTitle(populated, .forecastSummary),
-        rowTitle(populated, .forecastDetail),
+        infoText(populated, .codexStatus),
+        infoText(populated, .codexWindows),
+        infoText(populated, .codexMeta),
+        infoText(populated, .notificationStatus),
+        infoText(populated, .forecastSummary),
+        infoText(populated, .forecastDetail),
         "Menu bar 7d label: shown",
     ] {
         expect(texts.contains(expected), "info view must show '\(expected)' (got \(texts))")
@@ -533,6 +587,11 @@ func testInfoViewRendersOffscreen() {
     // Offscreen render: real pixels, no window.
     view.frame = NSRect(origin: .zero, size: view.fittingSize)
     view.layoutSubtreeIfNeeded()
+    expectEqual(
+        view.meterWidth,
+        TrayInfoView.contentWidth - 40,
+        "usage meter must span the content width, not just the usage text stack"
+    )
     if let representation = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
         view.cacheDisplay(in: view.bounds, to: representation)
         var painted = 0

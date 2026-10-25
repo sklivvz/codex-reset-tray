@@ -1,8 +1,9 @@
 import AppKit
 
-/// Colors shared by the menu and the information popover. Errors need to stay
-/// readable on both light and dark menu/popover backgrounds, which the stock
-/// `systemOrange` is not on a light background.
+/// Colors shared by the status-item surfaces. Error text appears only in the
+/// information popover now that the actions menu carries no informational rows.
+/// Errors need to stay readable on both light and dark popover backgrounds,
+/// which the stock `systemOrange` is not on a light background.
 enum TrayPalette {
     static let error = NSColor(name: nil) { appearance in
         let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua

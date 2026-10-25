@@ -96,9 +96,11 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
 
         menu.delegate = self
         menu.autoenablesItems = false
-        menu.minimumWidth = 340
-        menu.setAccessibilityLabel("Codex Reset Tray menu")
-        menu.setAccessibilityHelp("Codex usage, forecast, and app actions.")
+        menu.setAccessibilityLabel("Codex Reset Tray actions")
+        menu.setAccessibilityHelp(
+            "Configuration and actions. Usage and forecast details are in the "
+                + "left-click information popover."
+        )
 
         statusItem.isVisible = true
 
@@ -162,7 +164,7 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
     var isInfoPopoverShown: Bool { infoPresenter.isShown }
 
     /// Left click toggles the information popover; right click (or
-    /// control-click) opens the actions menu.
+    /// control-click) dismisses it and opens the actions menu.
     func handleStatusClick(_ click: TrayStatusClick) {
         switch click {
         case .primary:
@@ -196,6 +198,11 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
 
     private func showActionsMenu() {
         guard !isMenuOpen else { return }
+        // Dismiss the information surface before native menu tracking starts,
+        // so a right-click cannot leave the transient popover above the menu.
+        if infoPresenter.isShown {
+            infoPresenter.hide()
+        }
         // Rebuild now: menuNeedsUpdate is not guaranteed to run before the
         // first tracking pass of a menu that is attached on demand.
         apply(TrayMenuModel.make(state: source.menuState))
@@ -322,7 +329,7 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
             menuItem.isEnabled = item.isEnabled
             menuItem.toolTip = item.toolTip
             menuItem.state = item.isChecked ? .on : .off
-            style(menuItem, as: item)
+            menuItem.title = item.title
         }
     }
 
@@ -351,34 +358,7 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
             break
         }
 
-        style(menuItem, as: item)
         return menuItem
-    }
-
-    private func style(_ menuItem: NSMenuItem, as item: TrayMenuItem) {
-        menuItem.attributedTitle = nil
-        switch item.role {
-        case .heading:
-            menuItem.attributedTitle = NSAttributedString(
-                string: item.title,
-                attributes: [
-                    .font: NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold),
-                    .foregroundColor: NSColor.labelColor,
-                ]
-            )
-        default:
-            if item.tone == .error {
-                menuItem.attributedTitle = NSAttributedString(
-                    string: item.title,
-                    attributes: [
-                        .font: NSFont.menuFont(ofSize: 0),
-                        .foregroundColor: TrayPalette.error,
-                    ]
-                )
-            } else {
-                menuItem.title = item.title
-            }
-        }
     }
 
     private func selector(for role: TrayMenuItemRole) -> Selector? {

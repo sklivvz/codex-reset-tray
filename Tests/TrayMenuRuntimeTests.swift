@@ -3,16 +3,21 @@ import Combine
 import Foundation
 import UserNotifications
 
-// This executable is an offscreen AppKit integration test. It constructs the
-// real TrayMenuController around a fake menu source and an unmounted
-// NSStatusBarButton. It never creates an NSStatusItem, shows a window or
-// popover, activates the application, starts a run loop, or launches the app
+// By default this executable is an offscreen AppKit integration test. It
+// constructs the real TrayMenuController around a fake menu source and an
+// unmounted NSStatusBarButton. It never creates an NSStatusItem, shows a window
+// or popover, activates the application, starts a run loop, or launches the app
 // bundle.
 //
 // NSApplication.shared is instantiated only because NSMenu dispatches item
 // actions through the application object; -run and -finishLaunching are never
 // called. On a command-line process its activation policy is .prohibited, so
 // no Dock tile or UI is created.
+//
+// Passing --live-status-item switches to the opt-in GUI check in
+// LiveStatusItemCheck.swift, which does create a real NSStatusItem and runs its
+// assertions under an actual NSApplication.run() event loop with a bounded
+// watchdog.
 
 var runtimeFailures = 0
 let runtimeNow = Date(timeIntervalSince1970: 1_800_000_000)
@@ -43,6 +48,9 @@ final class FakeTraySource: ObservableObject, TrayMenuSource {
     @Published private(set) var state: TrayMenuState
     private(set) var menuDidOpenCount = 0
     private(set) var refreshAllCount = 0
+    /// Optional probe run from `menuWillOpen`, before native menu tracking
+    /// begins. The live check uses it to observe the popover state at open time.
+    var onMenuDidOpen: (@MainActor () -> Void)?
 
     init(state: TrayMenuState) {
         self.state = state
@@ -87,6 +95,7 @@ final class FakeTraySource: ObservableObject, TrayMenuSource {
 
     func menuDidOpen() {
         menuDidOpenCount += 1
+        onMenuDidOpen?()
     }
 
     func refreshAll() async {
@@ -100,10 +109,13 @@ final class FakeStatusItemHost: TrayStatusItemHost {
     let button = NSStatusBarButton()
     /// Menus the controller asked the (fake) status item to show.
     private(set) var poppedMenus: [NSMenu] = []
+    /// Optional probe run at the moment the controller asks to pop the menu.
+    var onPopUp: (@MainActor () -> Void)?
     var statusButton: NSStatusBarButton? { button }
 
     func popUp(_ menu: NSMenu) {
         poppedMenus.append(menu)
+        onPopUp?()
     }
 }
 
@@ -558,41 +570,14 @@ func assertMenuMatchesModel(_ harness: Harness, _ label: String) {
             expected.isChecked ? .on : .off,
             "\(label): item \(index) check state"
         )
+        expect(actual.attributedTitle == nil, "\(label): action \(index) must be a plain native title")
 
-        if case .action = expected.role {
-            expect(actual.target === harness.controller, "\(label): action \(index) must target the controller")
-            expect(actual.action != nil, "\(label): action \(index) must have a selector")
-        } else {
-            expect(actual.target == nil, "\(label): non-action \(index) must not have a target")
-            expect(actual.action == nil, "\(label): non-action \(index) must not have an action")
+        guard case .action = expected.role else {
+            expect(false, "\(label): item \(index) must be an action or separator")
+            continue
         }
-
-        switch expected.tone {
-        case .error:
-            let color = actual.attributedTitle?.attribute(
-                .foregroundColor,
-                at: 0,
-                effectiveRange: nil
-            ) as? NSColor
-            expect(
-                colorsEqual(color, TrayPalette.error),
-                "\(label): error row \(index) must render with the readable error color"
-            )
-        case .normal:
-            if expected.role == .heading {
-                let font = actual.attributedTitle?.attribute(
-                    .font,
-                    at: 0,
-                    effectiveRange: nil
-                ) as? NSFont
-                expect(font != nil, "\(label): heading \(index) must use an attributed title")
-            } else {
-                expect(
-                    actual.attributedTitle == nil,
-                    "\(label): normal row \(index) must use a plain title"
-                )
-            }
-        }
+        expect(actual.target === harness.controller, "\(label): action \(index) must target the controller")
+        expect(actual.action != nil, "\(label): action \(index) must have a selector")
     }
 }
 
@@ -603,14 +588,22 @@ func testFirstOpenHasNonemptyMenuAndVisibleStatusIcon() {
     expect(harness.statusItem.isVisible, "status item host must be made visible")
     expect(harness.statusItem.poppedMenus.isEmpty, "the menu must not open without a right click")
     expect(harness.menu.delegate === harness.controller, "controller must be the menu delegate")
-    expectEqual(harness.menu.accessibilityLabel(), "Codex Reset Tray menu", "menu accessibility label")
+    expectEqual(harness.menu.accessibilityLabel(), "Codex Reset Tray actions", "menu accessibility label")
+    expect(
+        harness.menu.accessibilityHelp()?.contains("Configuration and actions") == true,
+        "menu accessibility help describes the actions-only surface"
+    )
     expect(!harness.menu.autoenablesItems, "the controller owns item enablement")
-    expectEqual(harness.menu.minimumWidth, 340, "menu minimum width")
 
     // The menu is populated before the first delegate callback, so the first
     // open can never show an empty NSMenu.
     expect(!harness.menu.items.isEmpty, "first-open menu must not be empty")
     expectEqual(harness.menu.items.count, harness.model.items.count, "initial item count")
+    expectEqual(
+        harness.menu.items.filter { !$0.isSeparatorItem }.count,
+        6,
+        "first-open menu must contain exactly the six actions"
+    )
 
     harness.controller.menuNeedsUpdate(harness.menu)
     expect(!harness.menu.items.isEmpty, "menu must be nonempty after menuNeedsUpdate")
@@ -667,34 +660,58 @@ func testFirstOpenHasNonemptyMenuAndVisibleStatusIcon() {
 }
 
 @MainActor
-func testForecastStatusAndMetaRows() {
+func testActionsMenuHasNoInformationalRows() {
     let harness = Harness(state: populatedState())
     assertMenuMatchesModel(harness, "populated")
 
-    guard let status = harness.item(for: .codexStatus),
-          let windows = harness.item(for: .codexWindows),
-          let meta = harness.item(for: .codexMeta),
-          let summary = harness.item(for: .forecastSummary),
-          let detail = harness.item(for: .forecastDetail) else {
-        expect(false, "populated menu is missing expected rows")
-        return
+    expectEqual(
+        harness.model.items.map(\.role),
+        [
+            .action(.toggleMenuBarUsage),
+            .action(.refresh),
+            .action(.copyStatus),
+            .action(.openWebsite),
+            .action(.donate),
+            .separator,
+            .action(.quit),
+        ],
+        "right-click menu must contain only configuration, actions, and Quit separation"
+    )
+    expectEqual(
+        harness.menu.items.filter { !$0.isSeparatorItem }.map(\.title),
+        [
+            "Hide 7d Label",
+            "Refresh",
+            "Copy Status Summary",
+            "Open codexreset.org",
+            "Support this project",
+            "Quit Codex Reset Tray",
+        ],
+        "right-click menu must contain exactly the six configuration/action titles"
+    )
+
+    let forbiddenFragments = [
+        "7-day Codex usage",
+        "Forecast",
+        "Notifications",
+        "Codex error",
+        "Baseline",
+        "Primary",
+        "Secondary",
+        "Latest confirmed reset",
+    ]
+    for item in harness.menu.items where !item.isSeparatorItem {
+        expect(item.isEnabled, "'\(item.title)' action must not be grayed out")
+        expect(item.target === harness.controller, "'\(item.title)' must target the controller")
+        expect(item.action != nil, "'\(item.title)' must have an action selector")
+        expect(item.attributedTitle == nil, "'\(item.title)' must use a plain native title")
+        for fragment in forbiddenFragments {
+            expect(
+                !item.title.contains(fragment),
+                "actions menu must not contain informational title '\(item.title)'"
+            )
+        }
     }
-
-    expect(status.title.contains("7-day Codex usage: 63%"), "status row weekly percentage")
-    expect(status.title.contains("resets"), "status row reset deadline")
-    expect(windows.title.contains("Primary 5-hour: 40%"), "primary usage row")
-    expect(windows.title.contains("Secondary 7-day: 63%"), "secondary usage row")
-    expect(meta.title.hasPrefix("Baseline: 72%"), "baseline row")
-    expect(meta.toolTip?.contains("Ordinary usage allowed: yes") == true, "usage permission tooltip")
-    expect(meta.toolTip?.contains("Codex read at") == true, "read time tooltip")
-    expect(meta.toolTip?.contains("Reset notification request scheduled at") == true, "scheduled notification tooltip")
-    expect(meta.toolTip?.contains("Notifications are allowed.") == true, "notification status tooltip")
-
-    expect(summary.title.contains("28% within 24h"), "24-hour forecast row")
-    expect(summary.title.contains("49% within 48h"), "48-hour forecast row")
-    expect(summary.toolTip == forecast().forecastSummary, "forecast summary tooltip")
-    expect(detail.title.contains("Latest confirmed reset"), "forecast detail row")
-    expect(detail.title.contains("Quota restored"), "forecast restoration status")
 
     expectEqual(harness.item(for: .action(.refresh))?.title, "Refresh", "Refresh row")
     expectEqual(
@@ -711,7 +728,7 @@ func testForecastStatusAndMetaRows() {
 }
 
 @MainActor
-func testErrorRows() {
+func testErrorDataStaysInPopoverAndActionsStayAvailable() {
     let codexMessage = "Codex app-server did not respond within 10 seconds."
     let codexHarness = Harness(
         state: TrayMenuState(
@@ -721,16 +738,20 @@ func testErrorRows() {
         )
     )
     assertMenuMatchesModel(codexHarness, "codex error")
-    let codexStatus = codexHarness.item(for: .codexStatus)
-    expect(codexStatus?.title.contains("Codex error: \(codexMessage)") == true, "Codex error row title")
-    expect(codexStatus?.isEnabled == true, "Codex error row must not be grayed out")
+    for item in codexHarness.menu.items where !item.isSeparatorItem {
+        expect(!item.title.contains(codexMessage), "Codex error must not leak into the actions menu")
+        expect(item.isEnabled, "actions must stay enabled in a Codex error state")
+    }
+    let codexInfo = TrayInfoModel.make(state: codexHarness.source.menuState)
     expect(
-        codexHarness.item(for: .codexWindows)?.title.contains("63%") == true,
-        "last known usage remains visible beside a Codex error"
+        codexInfo.row(withRole: .codexStatus)?.text.contains("Codex error: \(codexMessage)") == true,
+        "Codex error belongs to the popover model"
     )
+    expectEqual(codexInfo.row(withRole: .codexStatus)?.tone, .error,
+                "popover keeps the Codex error tone")
     expect(
-        codexHarness.item(for: .action(.quit))?.isEnabled == true,
-        "Quit remains enabled in a Codex error state"
+        codexInfo.row(withRole: .codexWindows)?.text.contains("63%") == true,
+        "last known usage remains visible beside a Codex error in the popover"
     )
 
     let forecastMessage = "codexreset.org returned HTTP 503."
@@ -738,16 +759,17 @@ func testErrorRows() {
         state: TrayMenuState(forecastError: forecastMessage, lastForecastCheck: runtimeNow)
     )
     assertMenuMatchesModel(forecastHarness, "forecast error")
-    let forecastSummary = forecastHarness.item(for: .forecastSummary)
+    for item in forecastHarness.menu.items where !item.isSeparatorItem {
+        expect(!item.title.contains(forecastMessage), "forecast error must not leak into the actions menu")
+        expect(item.isEnabled, "actions must stay enabled in a forecast error state")
+    }
+    let forecastInfo = TrayInfoModel.make(state: forecastHarness.source.menuState)
     expect(
-        forecastSummary?.title.contains("Forecast error: \(forecastMessage)") == true,
-        "forecast error row title"
+        forecastInfo.row(withRole: .forecastSummary)?.text.contains("Forecast error: \(forecastMessage)") == true,
+        "forecast error belongs to the popover model"
     )
-    expect(forecastSummary?.isEnabled == true, "forecast error row must not be grayed out")
-    expect(
-        forecastHarness.item(for: .action(.quit))?.isEnabled == true,
-        "Quit remains enabled in a forecast error state"
-    )
+    expectEqual(forecastInfo.row(withRole: .forecastSummary)?.tone, .error,
+                "popover keeps the forecast error tone")
 
     let cachedHarness = Harness(
         state: TrayMenuState(
@@ -759,14 +781,18 @@ func testErrorRows() {
         )
     )
     assertMenuMatchesModel(cachedHarness, "cached forecast with fresh error")
+    let cachedInfo = TrayInfoModel.make(state: cachedHarness.source.menuState)
     expect(
-        cachedHarness.item(for: .forecastSummary)?.title.contains("28% within 24h") == true,
-        "cached probabilities stay visible"
+        cachedInfo.row(withRole: .forecastSummary)?.text.contains("28% within 24h") == true,
+        "cached probabilities stay visible in the popover"
     )
-    expect(cachedHarness.item(for: .forecastSummary)?.title.contains("stale, updated") == true, "cached forecast shows freshness")
     expect(
-        cachedHarness.item(for: .forecastDetail)?.title.contains(forecastMessage) == true,
-        "fresh forecast error renders on the detail row"
+        cachedInfo.row(withRole: .forecastSummary)?.text.contains("stale, updated") == true,
+        "cached forecast shows freshness in the popover"
+    )
+    expect(
+        cachedInfo.row(withRole: .forecastDetail)?.text.contains(forecastMessage) == true,
+        "fresh forecast error renders on the popover detail row"
     )
 
     guard let image = codexHarness.statusItem.statusButton?.image else {
@@ -887,7 +913,7 @@ func testMenuBarUsageToggleOffscreen() async {
         return
     }
 
-    expectEqual(index, 1, "7d label toggle must be directly below the heading")
+    expectEqual(index, 0, "7d label toggle must be the first action, with no heading above it")
     expectEqual(toggle.title, "Hide 7d Label", "toggle title")
     expect(toggle.isEnabled, "toggle must be enabled")
     expectEqual(toggle.state, .on, "usage label must be checked by default")
@@ -1051,31 +1077,34 @@ func testOpenMenuUpdatesInPlaceAndCloseRebuilds() async {
     harness.controller.menuNeedsUpdate(harness.menu)
     harness.controller.menuWillOpen(harness.menu)
 
-    guard let statusBefore = harness.item(for: .codexStatus),
+    guard let toggleBefore = harness.item(for: .action(.toggleMenuBarUsage)),
           let firstItemBefore = harness.menu.items.first else {
         expect(false, "initial menu rows must exist")
         return
     }
-    let oldTitle = statusBefore.title
+    let oldTitle = toggleBefore.title
     let oldCount = harness.menu.items.count
 
-    harness.source.setState(populatedState())
-    expectEqual(statusBefore.title, oldTitle, "open menu must not mutate before the main queue runs")
+    harness.source.setShowsUsageInMenuBar(false)
+    expectEqual(toggleBefore.title, oldTitle, "open menu must not mutate before the main queue runs")
 
     // menuNeedsUpdate is ignored while open; the queued publisher update must
     // edit the existing items instead of replacing the open item list.
     harness.controller.menuNeedsUpdate(harness.menu)
-    expectEqual(statusBefore.title, oldTitle, "menuNeedsUpdate must be ignored while open")
+    expectEqual(toggleBefore.title, oldTitle, "menuNeedsUpdate must be ignored while open")
 
     await flushMainQueue()
     expectEqual(harness.menu.items.count, oldCount, "open menu item count must stay stable")
     expect(harness.menu.items.first === firstItemBefore, "open menu items must not be replaced")
-    expect(harness.item(for: .codexStatus) === statusBefore, "open status row identity")
+    expect(harness.item(for: .action(.toggleMenuBarUsage)) === toggleBefore,
+           "open toggle row identity")
     expectEqual(
-        statusBefore.title,
-        harness.model.item(withRole: .codexStatus)?.title,
-        "open status row must update in place"
+        toggleBefore.title,
+        harness.model.item(withRole: .action(.toggleMenuBarUsage))?.title,
+        "open toggle row must update in place"
     )
+    expectEqual(toggleBefore.title, "Show 7d Label", "open toggle follows the hidden label state")
+    expectEqual(toggleBefore.state, .off, "open toggle clears its check mark in place")
 
     harness.controller.menuDidClose(harness.menu)
     assertMenuMatchesModel(harness, "after close")
@@ -1579,9 +1608,14 @@ struct TrayMenuRuntimeTests {
     @MainActor
     static func main() async {
         if CommandLine.arguments.contains("--live-status-item") {
-            await runLiveStatusItemCheck()
+            runLiveStatusItemCheck()
             if runtimeFailures > 0 { exit(1) }
-            print("Real NSStatusItem left-click popover and right-click menu checks passed")
+            print(
+                "Real NSStatusItem left-click popover, live update, right-click "
+                    + "popover-close/menu-open, control-left menu-open, second-click close, "
+                    + "outside-click close, and actions-only menu checks passed under "
+                    + "NSApplication.run()"
+            )
             return
         }
         // Required only so NSMenu can dispatch menu-item actions through the
@@ -1591,8 +1625,8 @@ struct TrayMenuRuntimeTests {
         expect(application.windows.isEmpty, "test harness must not display windows")
 
         testFirstOpenHasNonemptyMenuAndVisibleStatusIcon()
-        testForecastStatusAndMetaRows()
-        testErrorRows()
+        testActionsMenuHasNoInformationalRows()
+        testErrorDataStaysInPopoverAndActionsStayAvailable()
         await testRefreshActionWiring()
         testCopyStatusActionWiring()
         testOpenWebsiteActionWiring()

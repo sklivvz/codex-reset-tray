@@ -77,7 +77,9 @@ final class TrayInfoView: NSView {
             root.trailingAnchor.constraint(equalTo: trailingAnchor),
             root.topAnchor.constraint(equalTo: topAnchor),
             root.bottomAnchor.constraint(equalTo: bottomAnchor),
-            meter.widthAnchor.constraint(equalTo: usage.widthAnchor),
+            // The meter spans the content width rather than the width of the
+            // much narrower value/caption labels in the usage stack.
+            meter.widthAnchor.constraint(equalToConstant: Self.contentWidth - 2 * Self.inset),
         ])
 
         setAccessibilityLabel("Codex Reset Tray details")
@@ -115,6 +117,10 @@ final class TrayInfoView: NSView {
 
     /// The meter's value, or `nil` while it is hidden. Used by offscreen tests.
     var meterFraction: Double? { meter.isHidden ? nil : meter.doubleValue }
+
+    /// Laid-out meter width. Used by offscreen tests to verify it spans the
+    /// content area instead of only the usage text stack.
+    var meterWidth: CGFloat { meter.frame.width }
 
     /// Every text currently shown, in reading order. Used by offscreen tests.
     var renderedTexts: [String] {
@@ -185,7 +191,7 @@ final class TrayInfoView: NSView {
 
     private static func makeBody(
         _ text: String,
-        tone: TrayMenuTone,
+        tone: TrayInfoTone,
         toolTip: String?,
         size: CGFloat
     ) -> NSTextField {

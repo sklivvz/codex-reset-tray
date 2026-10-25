@@ -38,5 +38,11 @@ jobs:
           ./build.sh
           ./test.sh
 
+      - name: Live status item harness
+        timeout-minutes: 3
+        run: |
+          test -x ./.build/tray-menu-runtime-tests
+          ./.build/tray-menu-runtime-tests --live-status-item
+
       - name: Package and validate universal DMG
         run: ./scripts/package-release.sh

@@ -5,6 +5,19 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+- Split the status item into exactly two surfaces. Left click opens one anchored
+  transient information popover containing every status, usage, reset,
+  notification, and forecast value; right click (or control-click) dismisses
+  that popover and opens one native actions menu containing only the 7d label
+  toggle, Refresh, Copy Status Summary, Open codexreset.org, Support this
+  project, and Quit. The menu has no informational rows or heading, and gray is
+  reserved for genuinely disabled actions.
+- Keep the menu and popover models independent (`TrayMenuModel` versus
+  `TrayInfoModel`), preserve all former informational data in the popover, and
+  add deterministic tests that fail if status content leaks back into the menu.
+- Run the opt-in `--live-status-item` harness on GitHub-hosted macOS CI after
+  the normal build and test steps, enforcing its exit status and watchdog.
+
 - Parse the current codexreset.org layout when `quota-restoration-status` is
   absent, while reporting timeline confirmations as global-only and preserving
   strict timestamp and forecast-probability validation.
@@ -27,7 +40,8 @@ All notable changes are documented here. This project follows
   once after the first usage read.
 - Preserve the actual `NSError` domain and code in a sanitized notification
   diagnostic (path-like domain characters are replaced), and distinguish a
-  scheduled notification request from confirmed visual delivery in the menu.
+  scheduled notification request from confirmed visual delivery in the
+  information popover.
 - Add deterministic tests for scheduled and early resets, both weekly slots,
   startup suppression, marker persistence, foreground delegate registration,
   scheduling, authorization denial/errors, and sanitized error diagnostics.
@@ -48,22 +62,30 @@ All notable changes are documented here. This project follows
   persisted baseline, so startup historical state is not reported as new.
 - Commit the per-window alert marker only after the notification scheduler
   accepts the request. Authorization and scheduling failures are shown in a
-  dedicated menu row, and the prior baseline is retained for retry.
-- Status and forecast rows are no longer grayed out; only genuinely unavailable
-  controls are disabled. Error text uses a color with WCAG AA contrast in light
-  and dark appearances.
-- Left-clicking the status icon opens a transient information popover anchored
-  to the menu-bar item (7-day usage, windows, baseline, forecast, errors) that
-  updates while open. Right-clicking (or control-clicking) opens the actions
-  menu.
-- The menu-bar icon is now the packaged `AppIcon.icns` in color instead of an SF
-  Symbol; the symbol remains only as a fallback.
+  dedicated popover row, and the prior baseline is retained for retry.
+- Informational status, usage, reset, notification, and forecast rows no longer
+  appear in the right-click menu, so native gray can only mean a disabled
+  action. Their full text, tones, and tooltips remain in the left-click
+  popover, whose error text keeps WCAG AA contrast in light and dark
+  appearances.
+- Left-clicking the status icon opens one transient information popover anchored
+  to the menu-bar item (7-day usage, windows, baseline, reset and notification
+  state, forecast, errors, and freshness) that updates while open.
+  Right-clicking (or control-clicking) dismisses it and opens the actions-only
+  native menu.
+- The menu-bar icon is now a monochrome template mask derived from the packaged
+  `AppIcon.icns` instead of an SF Symbol; the packaged app icon itself remains
+  colored, and the SF Symbol is used only as a fallback.
+- The popover's usage meter spans the full content width instead of only the
+  width of the small usage value/caption stack.
+- Copy Status Summary now reuses the popover's rows and footer without printing
+  duplicate detail lines.
 - The gap between the icon and the usage label is a compact 4 pt.
 
-- Makes the 7-day label toggle prominent directly below the menu heading and
-  changes its title to **Hide 7d Label** or **Show 7d Label** so the current
-  action is unambiguous. The native check mark, icon-only mode, and persisted
-  `codexShowUsageInMenuBar` preference are unchanged.
+- Makes the 7-day label toggle the first action in the menu, with no heading
+  above it, and changes its title to **Hide 7d Label** or **Show 7d Label** so
+  the current action is unambiguous. The native check mark, icon-only mode, and
+  persisted `codexShowUsageInMenuBar` preference are unchanged.
 
 ## [0.1.0] - 2026-10-24
 

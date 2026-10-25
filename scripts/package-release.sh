@@ -73,8 +73,8 @@ macOS may require right-click > Open, or System Settings > Privacy & Security >
 Open Anyway.
 
 After launch, left-click the menu-bar icon for details or right-click it for the
-actions menu. Use "Hide 7d Label" or "Show 7d Label" directly below the heading
-to hide or show the usage text; the icon always remains visible.
+actions menu. Use "Hide 7d Label" or "Show 7d Label" to hide or show the usage
+text; the icon always remains visible.
 
 Project: https://github.com/sklivvz/codex-reset-tray
 License: MIT (see LICENSE). See NOTICE for attribution and trademarks.
