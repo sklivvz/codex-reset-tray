@@ -7,6 +7,30 @@ func writeLiveStatus(_ message: String) {
     FileHandle.standardError.write(Data("[live-status] \(message)\n".utf8))
 }
 
+/// `NSApplication.stop(_:)` only sets a flag that `run()` checks after it
+/// dispatches an actual event. Stopping from a task or timer without a following
+/// event can leave the run loop waiting. Post an application-defined event so
+/// the loop wakes, dispatches it, and observes the stop flag.
+private func stopLiveApplicationRun(_ application: NSApplication) {
+    application.stop(nil)
+    guard let wake = NSEvent.otherEvent(
+        with: .applicationDefined,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: 0,
+        context: nil,
+        subtype: 0,
+        data1: 0,
+        data2: 0
+    ) else {
+        writeLiveStatus("application stop: could not create the wake event")
+        return
+    }
+    writeLiveStatus("application stop: posting application-defined wake event")
+    application.postEvent(wake, atStart: false)
+}
+
 /// Opt-in integration check. Unlike the default offscreen suite, this creates a
 /// real status item in the current GUI session and sends synthetic mouse events
 /// through a running `NSApplication`. It does not launch the packaged app or use
@@ -61,7 +85,7 @@ func runLiveStatusItemCheck() {
         runState.completed = true
         writeLiveStatus("checks completed; stopping NSApplication.run()")
         watchdog.disarm()
-        application.stop(nil)
+        stopLiveApplicationRun(application)
         writeLiveStatus("NSApplication.stop() returned")
     }
 
@@ -532,7 +556,7 @@ private final class LiveStatusItemWatchdog: NSObject {
         writeLiveStatus("watchdog: cancelling menu tracking and stopping NSApplication")
         menu.cancelTrackingWithoutAnimation()
         menu.cancelTracking()
-        application.stop(nil)
+        stopLiveApplicationRun(application)
         let escape = Timer(
             timeInterval: 2,
             target: self,
