@@ -204,7 +204,7 @@ struct TrayMenuTests {
 
         let denied = TrayMenuModel.make(
             state: TrayMenuState(
-                notificationStatus: "Notifications are denied in System Settings; early-restoration alerts cannot appear.",
+                notificationStatus: "Notifications are denied in System Settings; reset alerts cannot be scheduled.",
                 notificationStatusIsError: true
             )
         )
@@ -217,6 +217,22 @@ struct TrayMenuTests {
         expect(
             denied.item(withRole: .action(.quit))?.isEnabled == true,
             "Quit remains available when notifications are denied"
+        )
+
+        let scheduled = TrayMenuModel.make(
+            state: TrayMenuState(
+                notificationStatus: "Reset notification scheduled. Visual delivery depends on macOS settings."
+            )
+        )
+        let scheduledRow = scheduled.item(withRole: .notificationStatus)
+        expectEqual(
+            scheduledRow?.title,
+            "Reset notification scheduled. Visual delivery depends on macOS settings.",
+            "scheduled request is distinguished from visual delivery"
+        )
+        expect(
+            scheduledRow?.toolTip?.contains("does not confirm that a banner was displayed") == true,
+            "notification tooltip explains that scheduling is not proof of display"
         )
     }
 
@@ -290,6 +306,7 @@ struct TrayMenuTests {
                 capturedAt: menuTestNow.addingTimeInterval(-600),
                 alertedResetsAt: nil
             ),
+            lastNotificationScheduledAt: menuTestNow.addingTimeInterval(-900),
             notificationStatus: "Notifications are allowed.",
             forecast: forecast(),
             lastCodexCheck: menuTestNow,
@@ -301,6 +318,11 @@ struct TrayMenuTests {
         expect(summary.contains("Baseline: 72%"), "summary baseline")
         expect(summary.contains("Forecast: 28% within 24h"), "summary forecast")
         expect(summary.contains("Notifications are allowed."), "summary notifications")
+        expect(
+            summary.contains("Last reset notification request scheduled:")
+                && summary.contains("visual delivery not confirmed"),
+            "summary distinguishes scheduled notification from visual delivery"
+        )
         expect(summary.contains("Menu bar usage text: shown"), "summary menu-bar visibility")
         expect(summary.contains("no account ID, credential, or local file path"), "summary privacy note")
         expect(!summary.localizedCaseInsensitiveContains("accountId"), "summary must not include accountId")

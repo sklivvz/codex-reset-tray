@@ -40,14 +40,20 @@ struct CodexTests {
         try testErrorEnvelope()
         testFirstReadingEstablishesBaseline()
         testEarlyRestorationAlertsOnce()
-        testScheduledResetDoesNotAlert()
+        testScheduledResetAlerts()
+        testScheduledDeadlineWithoutResetEvidenceDoesNotAlert()
+        testZeroUsageScheduledRolloverAlerts()
+        testZeroUsageEarlyWindowAdvanceAlerts()
+        testZeroUsageUnchangedDeadlineDoesNotAlert()
+        testEarlyWindowChangeAlertsWhenUsageClimbed()
         testPermissionIsReportedNotRequired()
         testCoverageAfterResetUsageClimbs()
         testSmallPriorUsageResetAlerts()
         testNoAlertWithoutMaterialDrop()
         testNoAlertWithoutPriorDeadline()
         testPostResetUsageIncreaseRequiresAdvancedDeadline()
-        testPartialResetDoesNotAlert()
+        testPartialUsageDropDoesNotAlertWithoutNewWindow()
+        testBothWeeklySlotsAlert()
         testPollFailurePreservesBaseline()
         try testParsingFailureProducesNoAlert()
         testMissingWeeklyWindowProducesNoAlert()
@@ -159,9 +165,10 @@ struct CodexTests {
         expectEqual(alert.currentPercent, 0, "alert current usage")
         expectEqual(alert.resetsAt, deadline, "alert uses prior deadline")
         expectEqual(alert.ordinaryUsageAllowed, true, "alert carries backend permission")
+        expectEqual(alert.timing, .early, "same-deadline restoration is early")
         expect(
             evaluation.baseline.alertedResetsAt == nil,
-            "detector must not mark delivered before scheduling succeeds"
+            "detector must not mark scheduled before the system accepts the request"
         )
 
         let committed = evaluation.baseline.markingAlerted(resetsAt: deadline)
@@ -174,21 +181,186 @@ struct CodexTests {
         expect(repeated.alert == nil, "same window must not alert twice")
     }
 
-    private static func testScheduledResetDoesNotAlert() {
+    private static func testScheduledResetAlerts() {
         let deadline = testNow.addingTimeInterval(86_400)
         let previous = baseline(80, deadline: deadline)
         let nextDeadline = deadline.addingTimeInterval(7 * 86_400)
-        // At the deadline and just before it, a new window is the scheduled
-        // rollover, not an early restoration.
-        for now in [deadline, deadline.addingTimeInterval(1), deadline.addingTimeInterval(-60)] {
+        // A normal scheduled rollover is a real reset. Codex may report it a few
+        // seconds early, exactly at the deadline, or on the first poll after it.
+        for now in [
+            deadline.addingTimeInterval(-60),
+            deadline,
+            deadline.addingTimeInterval(1),
+            deadline.addingTimeInterval(3_600),
+        ] {
             let evaluation = RestorationDetector.evaluate(
                 previous: previous,
                 current: window(0, resetsAt: nextDeadline),
                 ordinaryUsageAllowed: true,
                 now: now
             )
-            expect(evaluation.alert == nil, "scheduled reset alone must not alert")
+            guard let alert = evaluation.alert else {
+                expect(false, "scheduled reset must alert at \(now.timeIntervalSince(deadline))s")
+                continue
+            }
+            expectEqual(alert.timing, .scheduled, "scheduled reset timing")
+            expectEqual(alert.resetsAt, deadline, "scheduled alert stores the old deadline")
+            expectEqual(alert.previousPercent, 80, "scheduled alert prior usage")
         }
+
+        // A delayed poll can already see usage in the new window. The deadline
+        // advance is still unambiguous evidence that the reset happened.
+        let climbed = RestorationDetector.evaluate(
+            previous: previous,
+            current: window(40, resetsAt: nextDeadline),
+            ordinaryUsageAllowed: true,
+            now: deadline.addingTimeInterval(1)
+        )
+        expect(climbed.alert != nil, "scheduled reset must alert even when usage already climbed")
+        expectEqual(climbed.alert?.timing, .scheduled, "climbed scheduled reset timing")
+    }
+
+    private static func testScheduledDeadlineWithoutResetEvidenceDoesNotAlert() {
+        let deadline = testNow.addingTimeInterval(86_400)
+        let evaluation = RestorationDetector.evaluate(
+            previous: baseline(80, deadline: deadline),
+            current: window(80, resetsAt: deadline),
+            ordinaryUsageAllowed: true,
+            now: deadline.addingTimeInterval(3_600)
+        )
+        expect(evaluation.alert == nil, "time passing without a new window or usage drop must not alert")
+    }
+
+    private static func testZeroUsageScheduledRolloverAlerts() {
+        let deadline = testNow.addingTimeInterval(86_400)
+        let previous = baseline(0, deadline: deadline)
+        let nextDeadline = deadline.addingTimeInterval(7 * 86_400)
+        // A 0% baseline must not hide a confirmed scheduled rollover.
+        for now in [
+            deadline.addingTimeInterval(-60),
+            deadline,
+            deadline.addingTimeInterval(3_600),
+        ] {
+            let evaluation = RestorationDetector.evaluate(
+                previous: previous,
+                current: window(0, resetsAt: nextDeadline),
+                ordinaryUsageAllowed: true,
+                now: now
+            )
+            guard let alert = evaluation.alert else {
+                expect(
+                    false,
+                    "zero-usage scheduled rollover must alert at \(now.timeIntervalSince(deadline))s"
+                )
+                continue
+            }
+            expectEqual(alert.timing, .scheduled, "zero-usage scheduled rollover timing")
+            expectEqual(alert.previousPercent, 0, "zero-usage scheduled alert prior usage")
+            expectEqual(alert.currentPercent, 0, "zero-usage scheduled alert current usage")
+            expectEqual(alert.resetsAt, deadline, "zero-usage scheduled alert stores the old deadline")
+        }
+
+        // New-window usage can appear before the next poll; the deadline advance
+        // is still sufficient evidence of the reset.
+        let climbed = RestorationDetector.evaluate(
+            previous: previous,
+            current: window(40, resetsAt: nextDeadline),
+            ordinaryUsageAllowed: true,
+            now: deadline.addingTimeInterval(1)
+        )
+        expect(climbed.alert != nil, "zero-usage rollover must alert even when usage already climbed")
+        expectEqual(climbed.alert?.timing, .scheduled, "zero-usage climbed rollover timing")
+    }
+
+    private static func testZeroUsageEarlyWindowAdvanceAlerts() {
+        let deadline = testNow.addingTimeInterval(86_400)
+        let previous = baseline(0, deadline: deadline)
+        let nextDeadline = deadline.addingTimeInterval(1_800)
+        let now = deadline.addingTimeInterval(-3_600)
+
+        for current in [0.0, 40.0] {
+            let evaluation = RestorationDetector.evaluate(
+                previous: previous,
+                current: window(current, resetsAt: nextDeadline),
+                ordinaryUsageAllowed: nil,
+                now: now
+            )
+            guard let alert = evaluation.alert else {
+                expect(false, "zero-usage early window advance must alert (current \(current)%)")
+                continue
+            }
+            expectEqual(alert.timing, .early, "zero-usage early window advance timing")
+            expectEqual(alert.previousPercent, 0, "zero-usage early alert prior usage")
+            expectEqual(alert.currentPercent, current, "zero-usage early alert current usage")
+            expectEqual(alert.resetsAt, deadline, "zero-usage early alert stores the old deadline")
+        }
+
+        let repeated = RestorationDetector.evaluate(
+            previous: previous.markingAlerted(resetsAt: deadline),
+            current: window(0, resetsAt: nextDeadline),
+            ordinaryUsageAllowed: nil,
+            now: now.addingTimeInterval(300)
+        )
+        expect(repeated.alert == nil, "zero-usage early window must not alert twice")
+    }
+
+    private static func testZeroUsageUnchangedDeadlineDoesNotAlert() {
+        let deadline = testNow.addingTimeInterval(86_400)
+        let previous = baseline(0, deadline: deadline)
+        // Time passing with the same deadline must not be mistaken for a reset.
+        for now in [
+            deadline.addingTimeInterval(-3_600),
+            deadline,
+            deadline.addingTimeInterval(3_600),
+        ] {
+            let unchanged = RestorationDetector.evaluate(
+                previous: previous,
+                current: window(0, resetsAt: deadline),
+                ordinaryUsageAllowed: true,
+                now: now
+            )
+            expect(
+                unchanged.alert == nil,
+                "zero-usage unchanged deadline must not alert at \(now.timeIntervalSince(deadline))s"
+            )
+
+            let increased = RestorationDetector.evaluate(
+                previous: previous,
+                current: window(40, resetsAt: deadline),
+                ordinaryUsageAllowed: true,
+                now: now
+            )
+            expect(
+                increased.alert == nil,
+                "zero-usage usage increase without a new deadline must not alert"
+            )
+        }
+
+        // A small backend timestamp correction below the new-window threshold is
+        // not a new window either.
+        let corrected = RestorationDetector.evaluate(
+            previous: previous,
+            current: window(0, resetsAt: deadline.addingTimeInterval(60)),
+            ordinaryUsageAllowed: true,
+            now: deadline.addingTimeInterval(3_600)
+        )
+        expect(corrected.alert == nil, "zero-usage deadline correction must not alert")
+    }
+
+    private static func testEarlyWindowChangeAlertsWhenUsageClimbed() {
+        let deadline = testNow.addingTimeInterval(86_400)
+        let evaluation = RestorationDetector.evaluate(
+            previous: baseline(80, deadline: deadline),
+            current: window(60, resetsAt: deadline.addingTimeInterval(1_800)),
+            ordinaryUsageAllowed: true,
+            now: deadline.addingTimeInterval(-3_600)
+        )
+        guard let alert = evaluation.alert else {
+            expect(false, "an advanced deadline before the old deadline is an early window change")
+            return
+        }
+        expectEqual(alert.timing, .early, "early window change timing")
+        expectEqual(alert.currentPercent, 60, "early window change keeps climbed usage")
     }
 
     private static func testPermissionIsReportedNotRequired() {
@@ -290,7 +462,7 @@ struct CodexTests {
         )
     }
 
-    private static func testPartialResetDoesNotAlert() {
+    private static func testPartialUsageDropDoesNotAlertWithoutNewWindow() {
         let deadline = testNow.addingTimeInterval(86_400)
         let now = deadline.addingTimeInterval(-3_600)
         for current in [40.0, 26.0] {
@@ -300,19 +472,38 @@ struct CodexTests {
                 ordinaryUsageAllowed: true,
                 now: now
             )
-            expect(sameDeadline.alert == nil, "partial drop to \(current)% must not alert")
-
-            let advancedDeadline = RestorationDetector.evaluate(
-                previous: baseline(80, deadline: deadline),
-                current: window(current, resetsAt: deadline.addingTimeInterval(1_800)),
-                ordinaryUsageAllowed: true,
-                now: now
-            )
             expect(
-                advancedDeadline.alert == nil,
-                "advanced deadline with usage still at \(current)% must not alert"
+                sameDeadline.alert == nil,
+                "partial drop to \(current)% without a new window must not alert"
             )
         }
+    }
+
+    private static func testBothWeeklySlotsAlert() {
+        let deadline = testNow.addingTimeInterval(86_400)
+        let primaryFirst = CodexPoller.apply(
+            .success(snapshot(primaryUsed: 80, secondaryUsed: nil, resetsAt: deadline)),
+            baseline: nil,
+            now: testNow
+        )
+        let secondaryNext = CodexPoller.apply(
+            .success(snapshot(primaryUsed: nil, secondaryUsed: 6, resetsAt: deadline)),
+            baseline: primaryFirst.baseline,
+            now: deadline.addingTimeInterval(-3_600)
+        )
+        expect(secondaryNext.alert != nil, "primary -> secondary weekly slot still alerts")
+
+        let secondaryFirst = CodexPoller.apply(
+            .success(snapshot(primaryUsed: nil, secondaryUsed: 63, resetsAt: deadline)),
+            baseline: nil,
+            now: testNow
+        )
+        let primaryNext = CodexPoller.apply(
+            .success(snapshot(primaryUsed: 6, secondaryUsed: nil, resetsAt: deadline)),
+            baseline: secondaryFirst.baseline,
+            now: deadline.addingTimeInterval(-3_600)
+        )
+        expect(primaryNext.alert != nil, "secondary -> primary weekly slot still alerts")
     }
 
     private static func testNoAlertWithoutPriorDeadline() {
@@ -495,6 +686,23 @@ struct CodexTests {
                 resetsAt: resetsAt
             ),
             secondary: nil,
+            observedAt: testNow
+        )
+    }
+
+    private static func snapshot(
+        primaryUsed: Double?,
+        secondaryUsed: Double?,
+        resetsAt: Date?
+    ) -> CodexRateLimitSnapshot {
+        CodexRateLimitSnapshot(
+            ordinaryUsageAllowed: true,
+            primary: primaryUsed.map {
+                CodexRateLimitWindow(usedPercent: $0, windowDurationMins: 10_080, resetsAt: resetsAt)
+            },
+            secondary: secondaryUsed.map {
+                CodexRateLimitWindow(usedPercent: $0, windowDurationMins: 10_080, resetsAt: resetsAt)
+            },
             observedAt: testNow
         )
     }

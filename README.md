@@ -5,10 +5,10 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A small macOS menu-bar app that watches **your own Codex quota** through the
-local `codex app-server` and notifies you when the 7-day usage window appears to
-have been restored early. It also shows [codexreset.org](https://codexreset.org/)
-forecasts in the menu, but those forecasts are informational and never trigger
-notifications.
+local `codex app-server` and notifies you when the 7-day usage window resets,
+whether that happens at its scheduled deadline or early. It also shows
+[codexreset.org](https://codexreset.org/) forecasts in the menu, but those
+forecasts are informational and never trigger notifications.
 
 ## Download for macOS
 
@@ -44,9 +44,10 @@ shasum -a 256 -c CodexResetTray-v0.1.0-macos-universal.dmg.sha256
 
 ## Menu-bar usage toggle
 
-The menu-bar item always shows the app icon (derived from the packaged
-`AppIcon.icns`, in color). By default it also shows the current 7-day usage
-text, for example `7d 89%`, a compact 4 pt to the right of the icon.
+The menu-bar item always shows a monochrome template glyph derived from the
+packaged `AppIcon.icns` (the packaged app icon remains colored). By default it
+also shows the current 7-day usage text, for example `7d 89%`, a compact 4 pt to
+the right of the icon.
 
 - **Left click** opens an information window with the 7-day usage, usage
   windows, baseline, forecast, and any errors. It updates while open.
@@ -79,47 +80,58 @@ real menu-bar item or observe the screen.
   returned the weekly window as `primary` on some accounts. The window's
   `resetsAt` is used as the prior reset deadline.
 
-### Early-restoration notification
+### Reset notification
 
 The app persists the latest 7-day usage baseline in `UserDefaults` under
 `codexWeeklyUsageBaselineV2`: prior used percentage, prior `resetsAt`, capture
-time, and an "already alerted" marker for that reset deadline. A notification is
+time, and an "already notified" marker for that reset deadline. A notification is
 considered only when **all** of these are true:
 
 1. This launch has already established a session baseline. The first successful
    reading after launch only adopts current state and never alerts, even when a
    persisted baseline exists, because that state may describe a reset that
    happened while the app was closed.
-2. The prior 7-day usage was greater than 0%.
-3. The current time is more than 5 minutes before the **prior** window's
-   `resetsAt`. A reset that is due or imminent is treated as scheduled and does
-   not alert.
-4. No alert has already been scheduled for that prior reset deadline.
-5. There is a genuine restoration signal: either the new 7-day `resetsAt` is at
-   least 5 minutes later than the prior deadline while current usage is at most
-   25%, or current usage is at most 25% and has fallen materially (at least 3
-   percentage points and at least half of the prior usage, or cleared to 1% or
-   less from at least 2 points). The ceiling is deliberately above 1%: usage can
-   be consumed again before the next poll after a reset.
+2. No notification has already been scheduled for that prior reset deadline.
+3. Codex reports a genuine reset signal: either the new 7-day `resetsAt` is at
+   least 5 minutes later than the prior deadline (a new window, whether scheduled
+   or early), or, when prior usage was greater than 0%, current usage is at most
+   25% and has fallen materially (at least 3 percentage points and at least half
+   of the prior usage, or cleared to 1% or less from at least 2 points). A
+   confirmed new window alerts even from a 0% baseline; the prior-usage
+   requirement applies only to same-deadline usage-drop inference. The usage
+   ceiling is deliberately above 1%: usage can be consumed again before the next
+   poll after a reset. A deadline advancing is sufficient even when usage has
+   already climbed in the new window.
+
+A window change at or within 5 minutes before the prior deadline is reported as
+the normal **scheduled** reset. A new window or a usage restoration before that
+deadline is reported as an **early** reset. Merely reaching the old deadline with
+no new deadline and no usage drop does not alert.
 
 `ordinaryUsageAllowed` is reported in the notification, but it is not required
-as evidence that the quota itself was restored. A false or missing value no
-longer suppresses a genuine deadline or usage transition.
+as evidence that the quota itself was restored. A false or missing value does not
+suppress a genuine deadline or usage transition.
 
-The alert is scheduled at most once per reset window. The persisted marker is
-written only after the notification scheduler accepts the request. If
+The notification is requested at most once per reset window. The persisted marker
+is written only after the notification scheduler accepts the request. If
 authorization is denied or scheduling fails, the prior baseline is retained so a
-later poll can retry, and the menu shows an error row with the reason. The alert
-is not sent on startup historical state, a scheduled timestamp arriving on its
-own, after the prior deadline, on a parse or transport failure, or because a
-codexreset.org forecast changed. Notification permission is requested only after
-the first usage fetch has begun.
+later poll can retry, and the menu shows an error row with the sanitized system
+error domain and code. The alert is not sent on startup historical state, on a
+parse or transport failure, or because a codexreset.org forecast changed.
+
+*Scheduled* means macOS accepted a local notification request. It does not prove
+that a banner was visually delivered; notification settings and Focus control
+that. A foreground presentation delegate keeps the request visible while the
+accessory app is active, and permission is requested only after the first usage
+fetch and only when the status is still undecided. The menu reports both the
+permission/scheduling state and that visual delivery is controlled by macOS.
 
 The menu shows primary/secondary windows, the persisted baseline and deadline,
-notification permission/delivery state, the latest forecast or forecast error,
-and any Codex error. `ordinaryUsageAllowed`, the last read time, and alert timing
-are available in item tooltips. Refresh, Copy Status Summary, Hide/Show 7d Label,
-Open codexreset.org, and Quit are always in the menu; Quit is enabled and last.
+notification permission/scheduling state, the latest forecast or forecast error,
+and any Codex error. `ordinaryUsageAllowed`, the last read time, and the last
+scheduled notification request are available in item tooltips. Refresh, Copy
+Status Summary, Hide/Show 7d Label, Open codexreset.org, and Quit are always in
+the menu; Quit is enabled and last.
 
 ### codexreset.org forecast
 
@@ -202,7 +214,12 @@ opener, and a fake termination handler. It exercises real `NSMenu` and
 - the `codexShowUsageInMenuBar` preference persists through a store restart and
   defaults to visible;
 - Refresh, Copy Status Summary, Open codexreset.org, and Quit wiring;
-- updates while the menu is open edit existing items rather than replacing them.
+- updates while the menu is open edit existing items rather than replacing them;
+- normal scheduled and early resets through `ResetStore`, including the
+  per-window duplicate marker, with a deterministic fake notification scheduler;
+- foreground presentation delegate registration, authorization pre-checks
+  (already granted, undecided, denied), scheduling, and sanitized `NSError`
+  domain/code diagnostics with a fake notification center.
 
 For a separate check in a GUI session, run
 `./.build/tray-menu-runtime-tests --live-status-item` after `./test.sh`. It

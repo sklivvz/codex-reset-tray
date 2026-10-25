@@ -9,6 +9,29 @@ All notable changes are documented here. This project follows
   absent, while reporting timeline confirmations as global-only and preserving
   strict timestamp and forecast-probability validation.
 
+- Detect and notify for normal scheduled 7-day window rollovers as well as early
+  resets. An advancing `resetsAt` is sufficient evidence even when usage has
+  already climbed in the new window; the old behavior suppressed every reset at
+  or near the scheduled deadline. A confirmed new window also alerts when the
+  prior baseline was 0%; prior usage now gates only same-deadline usage-drop
+  inference.
+- Classify the notification as a scheduled or early reset and avoid duplicate
+  notifications with the persisted per-deadline marker. Startup still adopts the
+  first reading without alerting, and time passing without a new deadline or a
+  usage drop is not treated as a reset.
+- Install a `UNUserNotificationCenterDelegate` that presents banner, list, and
+  sound while the accessory app is active, since nil-trigger notifications can be
+  suppressed in the foreground.
+- Check notification authorization before requesting it, so an already granted
+  or denied app is never prompted again. Undecided permission is still requested
+  once after the first usage read.
+- Preserve the actual `NSError` domain and code in a sanitized notification
+  diagnostic (path-like domain characters are replaced), and distinguish a
+  scheduled notification request from confirmed visual delivery in the menu.
+- Add deterministic tests for scheduled and early resets, both weekly slots,
+  startup suppression, marker persistence, foreground delegate registration,
+  scheduling, authorization denial/errors, and sanitized error diagnostics.
+
 - Adds a Support this project action and repository funding link to the active
   PayPal.Me/sklivvz recipient page.
 

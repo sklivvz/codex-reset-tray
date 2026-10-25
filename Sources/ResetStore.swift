@@ -9,7 +9,7 @@ final class ResetStore: ObservableObject {
     @Published private(set) var isPollingCodex = false
 
     @Published private(set) var baseline: WeeklyUsageBaseline?
-    @Published private(set) var lastAlertAt: Date?
+    @Published private(set) var lastNotificationScheduledAt: Date?
 
     @Published private(set) var forecast: ResetSnapshot?
     @Published private(set) var forecastError: String?
@@ -29,9 +29,9 @@ final class ResetStore: ObservableObject {
     private let notifications: any NotificationScheduling
     private let fetchRateLimits: @Sendable () async throws -> CodexRateLimitSnapshot
     private var pollingTask: Task<Void, Never>?
-    private var hasRequestedNotificationAuthorization = false
+    private var hasPreparedNotificationAuthorization = false
     private var hasEstablishedSessionBaseline = false
-    private var hasAttemptedAlertDelivery = false
+    private var hasAttemptedNotificationScheduling = false
     private var lastMenuForecastFetch: Date?
     private let fetchForecast: () async throws -> ResetSnapshot
 
@@ -77,7 +77,7 @@ final class ResetStore: ObservableObject {
             codexError: codexError,
             isPollingCodex: isPollingCodex,
             baseline: baseline,
-            lastAlertAt: lastAlertAt,
+            lastNotificationScheduledAt: lastNotificationScheduledAt,
             notificationStatus: notificationStatus,
             notificationStatusIsError: notificationStatusIsError,
             forecast: forecast,
@@ -138,7 +138,7 @@ final class ResetStore: ObservableObject {
 
         // The permission prompt starts only after the first usage fetch has begun
         // (and completed). It does not block evaluation of the reading.
-        requestNotificationAuthorizationIfNeeded()
+        prepareNotificationAuthorizationIfNeeded()
 
         let now = Date()
         let outcome = CodexPoller.apply(result, baseline: baseline, now: now)
@@ -169,66 +169,67 @@ final class ResetStore: ObservableObject {
             return
         }
 
-        hasAttemptedAlertDelivery = true
+        hasAttemptedNotificationScheduling = true
         let delivery = await notifications.schedule(alert)
         switch delivery {
-        case .delivered:
+        case .scheduled:
             // Commit both the new reading and the per-deadline marker only now.
             let committed = observedBaseline.markingAlerted(resetsAt: alert.resetsAt)
             baseline = committed
             baselineStore.save(committed)
-            lastAlertAt = now
+            lastNotificationScheduledAt = now
             setNotificationStatus(
-                "Early-restoration notification scheduled from Codex usage.",
+                "Reset notification scheduled. Visual delivery depends on macOS settings.",
                 isError: false
             )
         case .notAuthorized(let authorization):
             // Keep the previous baseline so the next poll can retry with the same
             // evidence instead of silently losing the restoration.
             setNotificationStatus(
-                "Early-restoration notification not sent: \(authorization.explanation)",
+                "Reset notification not scheduled: \(authorization.explanation)",
                 isError: true
             )
         case .failed(let message):
             setNotificationStatus(
-                "Could not schedule the early-restoration notification: \(message)",
+                "Could not schedule the reset notification: \(message)",
                 isError: true
             )
         }
     }
 
-    private func requestNotificationAuthorizationIfNeeded() {
-        guard !hasRequestedNotificationAuthorization else { return }
-        hasRequestedNotificationAuthorization = true
+    private func prepareNotificationAuthorizationIfNeeded() {
+        guard !hasPreparedNotificationAuthorization else { return }
+        hasPreparedNotificationAuthorization = true
         // This starts only after the first usage fetch has begun. It deliberately
-        // does not block polling if the system prompt is left unanswered.
+        // does not block polling if the system prompt is left unanswered. The
+        // status is checked first so an already granted app is never prompted.
         Task { [weak self] in
             guard let self else { return }
-            let status = await self.notifications.requestAuthorization()
+            let status = await self.notifications.prepareAuthorization()
             self.applyAuthorizationStatus(status)
         }
     }
 
     private func applyAuthorizationStatus(_ status: NotificationAuthorization) {
-        // A delivery result is more specific than a background authorization
+        // A scheduling result is more specific than a background authorization
         // result; never let a late permission response hide a failure or success.
-        guard !hasAttemptedAlertDelivery else { return }
+        guard !hasAttemptedNotificationScheduling else { return }
         switch status {
         case .authorized, .provisional, .ephemeral:
             setNotificationStatus("Notifications are allowed.", isError: false)
         case .denied:
             setNotificationStatus(
-                "Notifications are denied in System Settings; early-restoration alerts cannot appear.",
+                "Notifications are denied in System Settings; reset alerts cannot be scheduled.",
                 isError: true
             )
         case .notDetermined:
             setNotificationStatus(
-                "Notification permission has not been decided; early-restoration alerts may not appear.",
+                "Notification permission has not been decided; reset alerts may not appear.",
                 isError: true
             )
         case .error(let message):
             setNotificationStatus(
-                "Could not request notification permission: \(message)",
+                "Notification permission check failed: \(message)",
                 isError: true
             )
         }

@@ -48,7 +48,7 @@ struct TrayMenuState: Equatable {
     var codexError: String?
     var isPollingCodex: Bool
     var baseline: WeeklyUsageBaseline?
-    var lastAlertAt: Date?
+    var lastNotificationScheduledAt: Date?
     var notificationStatus: String?
     var notificationStatusIsError: Bool
     var forecast: ResetSnapshot?
@@ -64,7 +64,7 @@ struct TrayMenuState: Equatable {
         codexError: String? = nil,
         isPollingCodex: Bool = false,
         baseline: WeeklyUsageBaseline? = nil,
-        lastAlertAt: Date? = nil,
+        lastNotificationScheduledAt: Date? = nil,
         notificationStatus: String? = nil,
         notificationStatusIsError: Bool = false,
         forecast: ResetSnapshot? = nil,
@@ -79,7 +79,7 @@ struct TrayMenuState: Equatable {
         self.codexError = codexError
         self.isPollingCodex = isPollingCodex
         self.baseline = baseline
-        self.lastAlertAt = lastAlertAt
+        self.lastNotificationScheduledAt = lastNotificationScheduledAt
         self.notificationStatus = notificationStatus
         self.notificationStatusIsError = notificationStatusIsError
         self.forecast = forecast
@@ -222,6 +222,12 @@ struct TrayMenuModel: Equatable {
         if let lastSuccess = state.lastForecastSuccess {
             lines.append("Forecast last updated: \(dateText(lastSuccess))")
         }
+        if let scheduledAt = state.lastNotificationScheduledAt {
+            lines.append(
+                "Last reset notification request scheduled: \(dateText(scheduledAt)) "
+                    + "(visual delivery not confirmed)"
+            )
+        }
         lines.append("Menu bar usage text: \(state.showsUsageInMenuBar ? "shown" : "hidden")")
         lines.append("This summary contains no account ID, credential, or local file path.")
         return lines.joined(separator: "\n")
@@ -346,8 +352,11 @@ struct TrayMenuModel: Equatable {
             toolTipParts.append("Ordinary usage allowed: \(allowedText(snapshot.ordinaryUsageAllowed))")
             toolTipParts.append("Codex read at \(dateText(snapshot.observedAt))")
         }
-        if let lastAlertAt = state.lastAlertAt {
-            toolTipParts.append("Early-restoration alert sent at \(dateText(lastAlertAt))")
+        if let scheduledAt = state.lastNotificationScheduledAt {
+            toolTipParts.append(
+                "Reset notification request scheduled at \(dateText(scheduledAt)); "
+                    + "visual delivery is controlled by macOS."
+            )
         }
         if let notificationStatus = state.notificationStatus {
             toolTipParts.append(notificationStatus)
@@ -364,10 +373,11 @@ struct TrayMenuModel: Equatable {
     private static func notificationStatusItem(_ state: TrayMenuState) -> TrayMenuItem {
         TrayMenuItem(
             role: .notificationStatus,
-            title: state.notificationStatus ?? "Notifications: permission has not been requested yet.",
+            title: state.notificationStatus ?? "Notifications: permission has not been checked yet.",
             tone: state.notificationStatusIsError ? .error : .normal,
             isEnabled: true,
-            toolTip: "Notification permission and delivery state for early-restoration alerts."
+            toolTip: "Notification permission and scheduling state for reset alerts. "
+                + "Scheduling a request does not confirm that a banner was displayed."
         )
     }
 
