@@ -52,34 +52,52 @@ the right of the icon.
 
 There are exactly two surfaces:
 
-- **Left click** opens one anchored transient `NSPopover` below the menu-bar
-  item. It contains all status, usage-window, reset, notification, and forecast
-  data, including errors, last-check times, and the current label setting. It
-  updates while open and closes transiently when you click elsewhere.
+- **Left click** opens one compact, anchored, transient `NSPopover` below the
+  menu-bar item. It keeps the 7-day usage headline and meter, plus two large
+  side-by-side forecast figures for the next 24 and 48 hours. Loading, stale,
+  and error states use normal label or readable error text, never disabled gray.
+  Codex windows, baseline, notification prose, the latest confirmed reset,
+  check times, version/build, and the old footer are intentionally absent; the
+  popover updates while open and closes transiently when you click elsewhere.
 - **Right click** (or control-click) first dismisses the open information
   popover, then opens one native `NSMenu` containing only configuration and
-  actions: the 7d label toggle, Refresh, Copy Status Summary, Open
-  codexreset.org, Support this project, and Quit. The menu has no heading and no
-  informational rows. A single native separator before Quit is the only
-  structural element retained.
+  actions: the 7d label toggle, **Enable Notifications** with a native check
+  mark, Refresh, Copy Status Summary, Open codexreset.org, Support this project,
+  a native separator, **About Codex Reset Tray**, and Quit. The menu has no
+  heading and no informational rows.
 
 Native gray text means an action is genuinely disabled. The actions menu never
 uses gray for status or to de-emphasize information, because it contains none.
 
-- **Hide 7d Label** is the first checked action in the menu.
-- It is checked by default. Selecting it hides the `7d 89%` text, clears the
-  check mark, and changes the item to **Show 7d Label**, leaving only the icon.
+- **Show 7d Label** is always the first action's exact title, and it is checked
+  by default while the `7d 89%` text is visible.
+- Selecting a checked item hides the text and clears the check mark, leaving
+  only the icon; selecting it again restores the text and the check mark. The
+  title does not change; the native check mark alone reflects visibility.
 - The choice persists in `UserDefaults` under the key
   `codexShowUsageInMenuBar` and is restored on the next launch.
 - The icon itself is never hidden by this setting, including in error states.
 
-The offscreen AppKit tests exercise both states, the native check mark, the
-retained icon, and persistence across store restarts. They also assert that the
-menu model contains no information rows while the popover model contains all of
-them. The offscreen suite does not exercise the real menu-bar item or observe
-the screen; the opt-in live check below covers those paths.
+The offscreen AppKit tests exercise both label states, the native check mark,
+the retained icon, persistence across store restarts, the exact compact popover
+content, large forecast-figure typography and side-by-side layout, and the
+absence of the removed usage/footer/version/notification text. They also assert
+that the menu model contains no informational rows. The offscreen suite does not
+exercise the real menu-bar item or observe the screen; the opt-in live check
+below covers those paths.
 
-## Behavior
+- **Enable Notifications** is a checked menu action, not popover prose. It is
+  checked only when macOS reports `authorized`, `provisional`, or `ephemeral`.
+  When authorization is still `notDetermined`, selecting it calls
+  `requestAuthorization` so macOS shows its prompt. Once permission is denied,
+  Apple does not allow the app to prompt again, so selecting the item opens
+  **System Settings > Notifications** instead. When permission is already
+  allowed, selecting it also opens that pane so the checked item remains
+  meaningful. The authorization is re-read when the menu opens and when the app
+  regains focus, so the check mark follows changes made in System Settings.
+- **About Codex Reset Tray** opens AppKit's standard About panel with the app
+  icon and the bundle's version and build. The presenter is injectable, so tests
+  verify the action and panel configuration without displaying a panel.
 
 ### Codex usage: source of truth
 
@@ -88,8 +106,9 @@ the screen; the opt-in live check below covers those paths.
   handshake, and calls `account/rateLimits/read`. It only reads usage; it does
   not log in, log out, or modify account state.
 - Each call has a hard 10-second deadline. A missing binary, launch failure, RPC
-  error, timeout, or malformed response is shown in the left-click information
-  popover and can never produce a notification.
+  error, timeout, or malformed response is reflected by the error menu-bar glyph
+  and accessibility description, and remains available in Copy Status Summary;
+  it can never produce a notification.
 - The 7-day window is identified by `windowDurationMins == 10080`, whichever
   slot (`primary` or `secondary`) contains it. This matters because Codex has
   returned the weekly window as `primary` on some accounts. The window's
@@ -130,40 +149,43 @@ suppress a genuine deadline or usage transition.
 The notification is requested at most once per reset window. The persisted marker
 is written only after the notification scheduler accepts the request. If
 authorization is denied or scheduling fails, the prior baseline is retained so a
-later poll can retry, and the information popover shows an error row with the
-sanitized system error domain and code. The alert is not sent on startup
-historical state, on a parse or transport failure, or because a codexreset.org
-forecast changed.
+later poll can retry, and Copy Status Summary keeps the permission/scheduling
+state with the sanitized system error domain and code. The alert is not sent on
+startup historical state, on a parse or transport failure, or because a
+codexreset.org forecast changed.
 
 *Scheduled* means macOS accepted a local notification request. It does not prove
 that a banner was visually delivered; notification settings and Focus control
 that. A foreground presentation delegate keeps the request visible while the
-accessory app is active, and permission is requested only after the first usage
-fetch and only when the status is still undecided. The information popover
-reports both the permission/scheduling state and when the last notification
-request was scheduled, with the reminder that visual delivery is controlled by
-macOS.
+accessory app is active. The app never prompts for notification permission after
+a Codex fetch or while scheduling a reset. The only prompt path is the explicit
+**Enable Notifications** menu action while authorization is still
+`notDetermined`; scheduling merely reads the current authorization. Permission
+status is shown in the menu by the native check mark, and Copy Status Summary
+retains the diagnostic detail.
 
-The information popover shows primary/secondary windows, the persisted baseline
-and deadline, notification permission/scheduling state, the latest forecast or
-forecast error, and any Codex error. `ordinaryUsageAllowed`, the last read time,
-and the last scheduled notification request are visible there and in row
-tooltips. The right-click menu never duplicates these rows: it always contains
-only the 7d label toggle, Refresh, Copy Status Summary, Open codexreset.org,
-Support this project, and Quit. Every action is enabled, and Quit is last.
+The compact left-click popover deliberately shows only the usage headline/meter
+and the two forecast figures (plus a loading, stale, or error line when needed).
+It contains no Codex usage section, latest-confirmed-reset row, notification
+prose, footer, or version/build text. The right-click menu never duplicates
+status data: it always contains only the 7d label toggle, Enable Notifications,
+Refresh, Copy Status Summary, Open codexreset.org, Support this project,
+About Codex Reset Tray, and Quit. Every action is enabled, and Quit is last.
 
 ### codexreset.org forecast
 
 - Forecasts are fetched when the information popover or actions menu opens, or
   when Refresh is pressed.
 - Refresh also re-polls Codex usage immediately.
-- The information popover shows 24-hour and 48-hour probabilities, the latest
-  confirmed reset (and account-level restoration when the site reports it), and
-  the forecast summary in its rows and tooltips.
+- The compact popover shows 24-hour and 48-hour probabilities as two large,
+  side-by-side figures; account-level restoration and the forecast summary remain
+  in its tooltip.
 - If the site only confirms a reset on its global timeline, the tooltip labels
   that as global and does not claim the monitored account was restored.
-- A failed refresh keeps the last forecast visible as stale and shows when it
-  was last updated. Opening either surface retries after a failure.
+- A failed refresh keeps the last two probabilities visible as stale and shows a
+  readable error-colored freshness line. A failure with no cached forecast keeps
+  the two placeholder columns and shows the error. Opening either surface retries
+  after a failure.
 - The site is never consulted for notification decisions.
 
 ## Requirements
@@ -215,8 +237,8 @@ with an injected menu source, an unmounted status-button host, a fake URL
 opener, and a fake termination handler. It exercises real `NSMenu` and
 `NSMenuItem` instances and checks:
 
-- the menu is nonempty before and on the first open and contains exactly the six
-  configuration/actions rows plus the native separator before Quit;
+- the menu is nonempty before and on the first open and contains exactly the eight
+  configuration/actions rows plus the native separator before About/Quit;
 - no informational status, usage, reset, notification, or forecast row appears
   in the menu model or in any native `NSMenuItem` title;
 - every action is enabled and uses a plain native title, so gray can only ever
@@ -234,39 +256,52 @@ opener, and a fake termination handler. It exercises real `NSMenu` and
 - the production popover presenter is configured as `.transient` and hosts the
   same content view without creating a window before it is shown;
 - the popover follows source updates while open; a transient close during the
-  status-button click still completes the show/hide toggle; all informational
-  rows and error tones remain in the popover model (error text meets WCAG AA
-  contrast in light and dark);
-- status, usage-window, baseline, reset, notification, forecast, and error data
-  remain available in the popover model after being removed from the menu model;
-- the checked **Hide 7d Label** / **Show 7d Label** toggle in both states, with
-  the icon still renderable while the text is hidden;
+  status-button click still completes the show/hide toggle;
+- the popover renders exactly the compact content: usage headline and meter plus
+  two large, equal-width, side-by-side 24h/48h percentage figures, with no Codex
+  usage section, latest-confirmed-reset row, footer, version/build text, or
+  notification-denial prose. Loading, stale, and error lines use label or error
+  color rather than disabled gray, and error text meets WCAG AA contrast in
+  light and dark;
+- Copy Status Summary keeps the full diagnostic usage-window, baseline, reset,
+  notification, forecast, and check-time report even though the popover is
+  compact;
+- the **Show 7d Label** toggle in both states, with its exact title unchanged
+  and the native check mark following usage-label visibility, while the icon
+  still renders when the text is hidden;
 - the `codexShowUsageInMenuBar` preference persists through a store restart and
   defaults to visible;
-- Refresh, Copy Status Summary, Open codexreset.org, Support this project, and
-  Quit wiring;
+- the **Enable Notifications** check mark is on only for allowed statuses;
+  undetermined clicks request authorization, denied and allowed clicks open the
+  Notifications settings URL, the check mark refreshes on menu open and app
+  focus, and no Codex fetch or scheduled reset prompts for permission;
+- Refresh, Copy Status Summary, Open codexreset.org, Support this project,
+  About Codex Reset Tray, and Quit wiring, including the injected About
+  presenter and its bundle icon/version/build configuration;
 - updates while the menu is open edit existing items rather than replacing them;
 - normal scheduled and early resets through `ResetStore`, including the
   per-window duplicate marker, with a deterministic fake notification scheduler;
-- foreground presentation delegate registration, authorization pre-checks
-  (already granted, undecided, denied), scheduling, and sanitized `NSError`
-  domain/code diagnostics with a fake notification center.
+- foreground presentation delegate registration, explicit authorization
+  requests, scheduling without prompts, and sanitized `NSError` domain/code
+  diagnostics with a fake notification center.
 
 `./test.sh` also compiles the opt-in live check at
 `./.build/tray-menu-runtime-tests`. To run that check on a Mac with an active
 GUI session, run `./.build/tray-menu-runtime-tests --live-status-item`. It
 briefly creates a real `NSStatusItem` and sends synthetic mouse events through
 a running `NSApplication`. It checks that left click shows a transient
-information popover anchored to the real status button, renders every
-informational row, follows a live update, and toggles closed on a second left
-click. It then right-clicks while that popover is open, asserting the popover is
-closed by the time the native actions menu opens, and separately sends a
-control-left click through `NSApplication` to prove that route opens the same
-actions-only menu without a popover. The menu is checked for exactly the six
-configuration/actions rows, no informational titles, and all actions enabled.
-It also verifies transient outside-click dismissal, runs under a bounded
-watchdog, and removes the status item when done. This check is opt-in locally
-because it touches the menu bar and briefly displays a popover.
+information popover anchored to the real status button, renders exactly the
+compact usage/forecast content with large side-by-side figures and none of the
+removed text, follows a live update, and toggles closed on a second left click.
+It then right-clicks while that popover is open, asserting the popover is closed
+by the time the native actions menu opens, and separately sends a control-left
+click through `NSApplication` to prove that route opens the same actions-only
+menu without a popover. The menu is checked for exactly the eight
+configuration/actions rows, the notification/About items, no informational
+titles, and all actions enabled. It also verifies transient outside-click
+dismissal, runs under a bounded watchdog, and removes the status item when done.
+This check is opt-in locally because it touches the menu bar and briefly displays
+a popover.
 
 CI runs this live harness on a GitHub-hosted `macos-15` runner after
 `./build.sh` and `./test.sh`; the step fails the job on any non-zero harness

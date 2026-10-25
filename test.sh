@@ -55,6 +55,7 @@ swiftc -swift-version 5 -parse-as-library \
     "$ROOT/Sources/CodexAppServer.swift" \
     "$ROOT/Sources/CodexRateLimits.swift" \
     "$ROOT/Sources/Notifications.swift" \
+    "$ROOT/Sources/AboutPanel.swift" \
     "$ROOT/Sources/ResetPage.swift" \
     "$ROOT/Sources/ResetStore.swift" \
     "$ROOT/Sources/RestorationDetector.swift" \

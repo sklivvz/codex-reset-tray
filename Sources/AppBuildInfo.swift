@@ -9,6 +9,10 @@ enum AppBuildInfo {
     static let copyright = "Copyright © 2026 sklivvz"
     static let projectURL = URL(string: "https://github.com/sklivvz/codex-reset-tray")!
 
+    static var name: String {
+        infoValue(for: "CFBundleName") ?? "Codex Reset Tray"
+    }
+
     static var version: String {
         infoValue(for: "CFBundleShortVersionString") ?? fallbackVersion
     }

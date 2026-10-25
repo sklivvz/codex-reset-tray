@@ -88,10 +88,6 @@ func contrastRatio(
     return (max(fg, bg) + 0.05) / (min(fg, bg) + 0.05)
 }
 
-func infoText(_ state: TrayMenuState, _ role: TrayInfoRowRole) -> String {
-    TrayInfoModel.make(state: state).row(withRole: role)?.text ?? "<missing \(role)>"
-}
-
 func state(weeklyPercent: Double) -> TrayMenuState {
     var next = populatedState()
     next.snapshot = CodexRateLimitSnapshot(
@@ -144,22 +140,17 @@ func testOnlyUnavailableControlsAreDisabled() {
             "\(label): every actions-menu row must be enabled"
         )
 
-        // All informational content remains in the popover model, with normal
-        // or error tones, and is never modeled as a disabled menu row.
+        // The compact popover keeps exactly the usage headline/meter and two
+        // forecast figures; removed rows never reappear as model content.
         let info = TrayInfoModel.make(state: state)
-        expectEqual(
-            info.allRows.map(\.role),
-            [.codexStatus, .codexWindows, .codexMeta, .notificationStatus,
-             .forecastSummary, .forecastDetail],
-            "\(label): popover retains all informational rows"
+        expectEqual(info.forecastFigures.count, 2, "\(label): two compact forecast figures")
+        expect(
+            !String(describing: info).contains("Notifications are denied"),
+            "\(label): popover carries no notification prose"
         )
-        if state.codexError != nil {
-            expectEqual(info.row(withRole: .codexStatus)?.tone, .error,
-                        "\(label): popover retains the Codex error tone")
-        }
         if state.forecastError != nil {
-            expectEqual(info.row(withRole: .forecastSummary)?.tone, .error,
-                        "\(label): popover retains the forecast error tone")
+            expectEqual(info.forecastStatus?.tone, .error,
+                        "\(label): popover keeps the forecast error tone")
         }
     }
 }
@@ -517,8 +508,19 @@ func testRightClickShowsCurrentMenuContent() async {
     for item in harness.menu.items where !item.isSeparatorItem {
         expect(!item.title.contains("Codex usage"), "right-click menu must not show usage rows")
         expect(!item.title.contains("Forecast"), "right-click menu must not show forecast rows")
-        expect(!item.title.contains("Notifications"), "right-click menu must not show notification rows")
+        expect(!item.title.contains("denied in System Settings"),
+               "right-click menu must not show notification prose")
     }
+    expectEqual(
+        harness.item(for: .action(.enableNotifications))?.title,
+        "Enable Notifications",
+        "right-click menu keeps the checked permission control"
+    )
+    expectEqual(
+        harness.item(for: .action(.about))?.title,
+        "About Codex Reset Tray",
+        "right-click menu keeps the About action"
+    )
     await flushMainQueue()
 }
 
@@ -546,16 +548,22 @@ func testInfoPopoverTracksSourceUpdates() async {
     await flushMainQueue()
     expectEqual(harness.info.updates.last, TrayInfoModel.make(state: errorState), "popover follows the source")
 
-    // Toggling the label from the menu also reaches the open popover.
-    guard let toggle = harness.index(of: .action(.toggleMenuBarUsage)) else {
-        expect(false, "toggle must exist")
-        return
-    }
-    harness.menu.performActionForItem(at: toggle)
+    // A fresh forecast while open changes only the compact figures.
+    var changed = populatedState()
+    changed.forecast = ResetSnapshot(
+        resetAt: runtimeNow,
+        resetStatus: "Quota restored",
+        restorationStatus: "Monitored account: 50% → 100%.",
+        probability24h: 12,
+        probability48h: 34,
+        forecastSummary: "12% within 24 hours, 34% within 48 hours."
+    )
+    harness.source.setState(changed)
     await flushMainQueue()
-    expect(
-        harness.info.updates.last?.footer.contains("Menu bar 7d label: hidden") == true,
-        "popover reflects the hidden label preference"
+    expectEqual(
+        harness.info.updates.last?.forecastFigures.map(\.value),
+        ["12%", "34%"],
+        "open popover follows forecast figure updates"
     )
 
     harness.click(.leftMouseUp)
@@ -574,22 +582,49 @@ func testInfoViewRendersOffscreen() {
 
     view.update(with: TrayInfoModel.make(state: populated))
     let texts = view.renderedTexts
-    for expected in [
+    let expectedTexts = [
         "Codex Reset Tray",
         "63%",
         "7-day Codex usage",
-        "Codex usage",
         "Reset forecast",
-        infoText(populated, .codexStatus),
-        infoText(populated, .codexWindows),
-        infoText(populated, .codexMeta),
-        infoText(populated, .notificationStatus),
-        infoText(populated, .forecastSummary),
-        infoText(populated, .forecastDetail),
-        "Menu bar 7d label: shown",
+        "28%",
+        "49%",
+        "within 24h",
+        "within 48h",
+    ]
+    expectEqual(
+        texts.sorted(),
+        expectedTexts.sorted(),
+        "popover must contain exactly the compact usage and forecast content"
+    )
+    expect(
+        !texts.contains("Codex usage"),
+        "popover must not render the removed Codex usage section title"
+    )
+    for removed in [
+        "Latest confirmed reset",
+        "Last Codex check:",
+        "Menu bar 7d label:",
+        "Version ",
+        "Notifications are denied",
     ] {
-        expect(texts.contains(expected), "info view must show '\(expected)' (got \(texts))")
+        expect(
+            !texts.contains { $0.contains(removed) },
+            "popover must not render removed content '\(removed)'"
+        )
     }
+    expectEqual(view.forecastValues, ["28%", "49%"], "two forecast percentages")
+    expectEqual(view.forecastCaptions, ["within 24h", "within 48h"], "two forecast captions")
+    expect(
+        view.forecastValueFontSizes.allSatisfy { $0 >= 32 },
+        "forecast percentages must use large typography (got \(view.forecastValueFontSizes))"
+    )
+    expectEqual(
+        view.forecastValueFontSizes,
+        [TrayInfoView.forecastValueFontSize, TrayInfoView.forecastValueFontSize],
+        "both forecast figures share the prominent type size"
+    )
+    expect(view.forecastStatusText == nil, "a current forecast needs no status line")
     expect(view.meterFraction.map { abs($0 - 0.63) < 0.001 } == true, "meter shows 63%")
     expectEqual(view.fittingSize.width, TrayInfoView.contentWidth, "info view width")
     expect(view.fittingSize.height > 150, "info view must size to its content (got \(view.fittingSize.height))")
@@ -602,6 +637,21 @@ func testInfoViewRendersOffscreen() {
         TrayInfoView.contentWidth - 40,
         "usage meter must span the content width, not just the usage text stack"
     )
+
+    // Both large figures are laid out side by side in equal columns.
+    let columns = view.forecastColumnFrames
+    guard columns.count == 2 else {
+        expect(false, "info view must lay out exactly two forecast columns")
+        return
+    }
+    expect(columns[0].maxX <= columns[1].minX, "forecast columns must be side by side")
+    expect(abs(columns[0].width - columns[1].width) < 1, "forecast columns must share a width")
+    expect(abs(columns[0].minY - columns[1].minY) < 1, "forecast columns must share a baseline")
+    expect(
+        columns[1].maxX <= TrayInfoView.contentWidth - 20 + 1,
+        "forecast columns must fit the content width"
+    )
+
     if let representation = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
         view.cacheDisplay(in: view.bounds, to: representation)
         var painted = 0
@@ -617,7 +667,7 @@ func testInfoViewRendersOffscreen() {
         expect(false, "info view must provide an offscreen bitmap")
     }
 
-    // Normal rows use the label color; none is secondary/disabled gray.
+    // Visible text uses the label or error color; none is secondary/disabled gray.
     for text in texts {
         guard let field = view.field(showing: text) else { continue }
         expect(
@@ -626,37 +676,70 @@ func testInfoViewRendersOffscreen() {
         )
     }
 
-    // Errors: readable error color, text intact, last-known data still present.
-    let codexMessage = "Codex error: Codex app-server did not respond within 10 seconds."
-    let errorState = TrayMenuState(
+    // Loading: both columns remain, with a normal-color status line.
+    view.update(with: TrayInfoModel.make(state: TrayMenuState(isFetchingForecast: true)))
+    expectEqual(view.forecastValues, ["--", "--"], "loading shows two placeholders")
+    expectEqual(view.forecastStatusText, "Loading forecast…", "loading status text")
+    expect(
+        colorsEqual(view.forecastStatusColor, .labelColor),
+        "loading status must not use gray informational text"
+    )
+
+    // Stale: cached percentages remain, with an error-color freshness line and
+    // no notification prose even when the state contains it.
+    let staleState = TrayMenuState(
         snapshot: snapshot(),
-        codexError: "Codex app-server did not respond within 10 seconds.",
         notificationStatus: "Notifications are denied in System Settings.",
         notificationStatusIsError: true,
-        forecastError: "codexreset.org returned HTTP 503."
+        forecast: forecast(),
+        forecastError: "codexreset.org returned HTTP 503.",
+        lastForecastSuccess: runtimeNow.addingTimeInterval(-120)
     )
-    view.update(with: TrayInfoModel.make(state: errorState))
-    for message in [
-        codexMessage,
-        "Forecast error: codexreset.org returned HTTP 503.",
-        "Notifications are denied in System Settings.",
-    ] {
-        guard let field = view.field(showing: message) else {
-            expect(false, "info view must show error '\(message)'")
-            continue
-        }
-        expect(
-            colorsEqual(field.textColor, TrayPalette.error),
-            "error '\(message)' must use the readable error color"
-        )
-    }
+    view.update(with: TrayInfoModel.make(state: staleState))
+    expectEqual(view.forecastValues, ["28%", "49%"], "stale state keeps cached figures")
+    expect(
+        view.forecastStatusText?.contains("Stale forecast · updated") == true,
+        "stale state shows freshness"
+    )
+    expect(
+        colorsEqual(view.forecastStatusColor, TrayPalette.error),
+        "stale status must use the readable error color, not gray"
+    )
+    expect(
+        !view.renderedTexts.contains { $0.contains("Notifications are denied") },
+        "notification denial prose must never appear in the popover"
+    )
 
-    // Unknown usage: placeholder headline, no meter, stale rows replaced.
+    // Error without cached data: two placeholders plus a readable error line.
+    view.update(
+        with: TrayInfoModel.make(
+            state: TrayMenuState(
+                forecastError: "codexreset.org returned HTTP 503.",
+                lastForecastCheck: runtimeNow
+            )
+        )
+    )
+    expectEqual(view.forecastValues, ["--", "--"], "unavailable forecast keeps both columns")
+    expectEqual(
+        view.forecastStatusText,
+        "Forecast unavailable: codexreset.org returned HTTP 503.",
+        "unavailable forecast status text"
+    )
+    expect(
+        colorsEqual(view.forecastStatusColor, TrayPalette.error),
+        "forecast error must use the readable error color"
+    )
+
+    // Unknown usage: placeholder headline, no meter, loading forecast line.
     view.update(with: TrayInfoModel.make(state: TrayMenuState()))
     expect(view.renderedTexts.contains("--"), "unknown usage headline")
     expect(view.meterFraction == nil, "meter hidden without a 7-day window")
-    expect(!view.renderedTexts.contains(codexMessage), "old rows are replaced")
-    expectEqual(view.updateCount, 3, "view update count")
+    expectEqual(view.forecastStatusText, "Forecast not loaded yet.", "idle forecast status")
+    expect(
+        colorsEqual(view.forecastStatusColor, .labelColor),
+        "idle forecast status must not use gray informational text"
+    )
+    expectEqual(view.updateCount, 5, "view update count")
 
     expectEqual(application.windows.count, windowsBefore, "rendering the info view must not create a window")
 }

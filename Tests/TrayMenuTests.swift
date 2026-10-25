@@ -23,11 +23,13 @@ func expectEqual<T: Equatable>(_ actual: T, _ expected: T, _ message: String, li
 struct TrayMenuTests {
     private static let actionOnlyRoles: [TrayMenuItemRole] = [
         .action(.toggleMenuBarUsage),
+        .action(.enableNotifications),
         .action(.refresh),
         .action(.copyStatus),
         .action(.openWebsite),
         .action(.donate),
         .separator,
+        .action(.about),
         .action(.quit),
     ]
 
@@ -37,17 +39,17 @@ struct TrayMenuTests {
         testMenuStructureIsStable()
         testMenuNeverCarriesInformationalRows()
         testOnlySeparatorsAreDisabled()
-        testInfoForecastRendering()
+        testNotificationPermissionCheckmark()
+        testInfoCompactCurrentForecast()
+        testInfoCompactLoadingAndAbsentUsage()
         testInfoForecastErrorRendering()
         testInfoCachedForecastAndFreshErrorBothRender()
-        testInfoCodexErrorRendering()
-        testInfoNotificationStatusRendering()
-        testInfoLoadingRendering()
-        testInfoPreservesAllData()
+        testInfoRemovedContentAbsent()
         testWebsiteURL()
         testDonationLink()
+        testNotificationSettingsURL()
         testMenuBarUsageToggleModel()
-        testCopyStatusSummary()
+        testCopyStatusSummaryPreservesDiagnostics()
         testAccessibilityDescription()
         testInfoModel()
 
@@ -55,7 +57,7 @@ struct TrayMenuTests {
             FileHandle.standardError.write(Data("\(menuTestFailures) menu test assertion(s) failed\n".utf8))
             exit(1)
         }
-        print("Tray actions menu and information popover model tests passed")
+        print("Tray actions menu and compact information popover model tests passed")
     }
 
     private static func testActionsMenuOnlyContainsConfigurationAndActions() {
@@ -63,16 +65,21 @@ struct TrayMenuTests {
         expectEqual(
             model.items.map(\.role),
             actionOnlyRoles,
-            "right-click menu must contain only configuration, actions, and the native Quit separator"
+            "right-click menu must contain only configuration, actions, and the native separator"
         )
         expectEqual(
             model.items.filter { $0.isAction }.count,
-            6,
-            "all six configuration/action rows must be present"
+            8,
+            "all eight configuration/action rows must be present"
         )
         expect(
             model.items.allSatisfy { $0.isAction || $0.role == .separator },
             "the actions menu model must not contain informational roles"
+        )
+        expectEqual(
+            model.items.filter { !$0.isAction && $0.role != .separator }.count,
+            0,
+            "no informational rows may be added to the actions menu"
         )
     }
 
@@ -82,6 +89,8 @@ struct TrayMenuTests {
             ("polling", TrayMenuState(isPollingCodex: true, isFetchingForecast: true)),
             ("codex error", TrayMenuState(codexError: "Codex app-server is unavailable.")),
             ("forecast error", TrayMenuState(forecastError: "codexreset.org returned HTTP 503.")),
+            ("notifications allowed", TrayMenuState(notificationPermission: .allowed)),
+            ("notifications denied", TrayMenuState(notificationPermission: .denied)),
             ("populated", populatedState()),
         ]
 
@@ -107,14 +116,38 @@ struct TrayMenuTests {
             let toggle = model.item(withRole: .action(.toggleMenuBarUsage))
             expectEqual(
                 toggle?.title,
-                state.showsUsageInMenuBar ? "Hide 7d Label" : "Show 7d Label",
-                "\(label): menu-bar 7d label toggle title"
+                "Show 7d Label",
+                "\(label): menu-bar 7d label toggle always uses the exact title"
             )
             expect(toggle?.isEnabled == true, "\(label): menu-bar usage toggle must be enabled")
             expectEqual(
                 toggle?.isChecked,
                 state.showsUsageInMenuBar,
                 "\(label): menu-bar usage toggle checked state"
+            )
+            let notifications = model.item(withRole: .action(.enableNotifications))
+            expectEqual(
+                notifications?.title,
+                "Enable Notifications",
+                "\(label): notification permission title"
+            )
+            expect(
+                notifications?.isEnabled == true,
+                "\(label): notification permission item must remain actionable"
+            )
+            expectEqual(
+                notifications?.isChecked,
+                state.notificationPermission.allowsDelivery,
+                "\(label): notification check mark follows authorization"
+            )
+            expectEqual(
+                model.item(withRole: .action(.about))?.title,
+                "About Codex Reset Tray",
+                "\(label): About title"
+            )
+            expect(
+                model.item(withRole: .action(.about))?.isEnabled == true,
+                "\(label): About must be available"
             )
             let website = model.item(withRole: .action(.openWebsite))
             expectEqual(website?.title, "Open codexreset.org", "\(label): website action title")
@@ -135,6 +168,9 @@ struct TrayMenuTests {
             populatedState(),
             TrayMenuState(codexError: "Codex unavailable", forecastError: "Forecast unavailable"),
             TrayMenuState(showsUsageInMenuBar: false),
+            TrayMenuState(notificationPermission: .notDetermined),
+            TrayMenuState(notificationPermission: .denied),
+            TrayMenuState(notificationPermission: .allowed),
         ]
         let expected = TrayMenuModel.make(state: states[0]).items.map(\.role)
         for state in states {
@@ -144,24 +180,25 @@ struct TrayMenuTests {
     }
 
     private static func testMenuNeverCarriesInformationalRows() {
-        // Every status/usage/reset/notification/forecast fact belongs to the
+        // Every status/usage/reset/forecast fact belongs to the compact
         // left-click popover. None may leak back into the right-click menu.
         let states: [(String, TrayMenuState)] = [
             ("empty", TrayMenuState()),
             ("polling", TrayMenuState(isPollingCodex: true, isFetchingForecast: true)),
             ("codex error", TrayMenuState(snapshot: snapshot(), codexError: "Codex unavailable")),
             ("forecast error", TrayMenuState(forecastError: "HTTP 503")),
+            ("denied notifications", TrayMenuState(notificationPermission: .denied)),
             ("populated", populatedState()),
         ]
         let forbiddenFragments = [
             "7-day Codex usage",
             "Forecast",
-            "Notifications",
             "Codex error",
             "Baseline",
             "Primary",
             "Secondary",
             "Latest confirmed reset",
+            "denied in System Settings",
         ]
 
         for (label, state) in states {
@@ -176,14 +213,20 @@ struct TrayMenuTests {
                 }
             }
 
-            // The same state still carries every informational row in the
-            // popover model, so removing menu rows did not remove data.
             let info = TrayInfoModel.make(state: state)
+            expectEqual(info.title, "Codex Reset Tray", "\(label): compact popover title")
             expectEqual(
-                info.allRows.map(\.role),
-                [.codexStatus, .codexWindows, .codexMeta, .notificationStatus,
-                 .forecastSummary, .forecastDetail],
-                "\(label): information model row roles"
+                info.forecastFigures.count,
+                2,
+                "\(label): compact popover keeps exactly two forecast figures"
+            )
+            expect(
+                info.forecastStatus?.text.contains("Latest confirmed reset") != true,
+                "\(label): compact popover must not carry the latest confirmed reset row"
+            )
+            expect(
+                info.forecastStatus?.text.contains("Notifications") != true,
+                "\(label): compact popover must not carry notification prose"
             )
         }
     }
@@ -197,6 +240,7 @@ struct TrayMenuTests {
             ("polling", TrayMenuState(isPollingCodex: true, isFetchingForecast: true)),
             ("codex error", TrayMenuState(snapshot: snapshot(), codexError: "Codex unavailable")),
             ("forecast error", TrayMenuState(forecastError: "HTTP 503")),
+            ("denied notifications", TrayMenuState(notificationPermission: .denied)),
             ("populated", populatedState()),
         ]
         for (label, state) in states {
@@ -210,23 +254,87 @@ struct TrayMenuTests {
         }
     }
 
-    private static func testInfoForecastRendering() {
+    private static func testNotificationPermissionCheckmark() {
+        let cases: [(TrayNotificationPermission, Bool)] = [
+            (.allowed, true),
+            (.notDetermined, false),
+            (.denied, false),
+            (.unknown, false),
+        ]
+        for (permission, checked) in cases {
+            let model = TrayMenuModel.make(
+                state: TrayMenuState(notificationPermission: permission)
+            )
+            let item = model.item(withRole: .action(.enableNotifications))
+            expectEqual(item?.isChecked, checked, "permission \(permission) check mark")
+            expect(item?.isEnabled == true, "permission \(permission) item stays actionable")
+            expect(
+                item?.toolTip?.isEmpty == false,
+                "permission \(permission) item has an explanatory tooltip"
+            )
+        }
+        expectEqual(
+            TrayMenuModel.make(state: TrayMenuState(notificationPermission: .notDetermined))
+                .item(withRole: .action(.enableNotifications))?.toolTip,
+            "Ask macOS for permission to show reset notifications.",
+            "undetermined tooltip describes the prompt route"
+        )
+        expectEqual(
+            TrayMenuModel.make(state: TrayMenuState(notificationPermission: .denied))
+                .item(withRole: .action(.enableNotifications))?.toolTip,
+            "Notifications are disabled. Open System Settings > Notifications.",
+            "denied tooltip describes the settings route"
+        )
+        expectEqual(
+            TrayMenuModel.make(state: TrayMenuState(notificationPermission: .allowed))
+                .item(withRole: .action(.enableNotifications))?.toolTip,
+            "Notifications are allowed. Open System Settings > Notifications.",
+            "allowed tooltip keeps the settings action meaningful"
+        )
+    }
+
+    private static func testInfoCompactCurrentForecast() {
         let info = TrayInfoModel.make(state: populatedState())
 
-        let status = info.row(withRole: .codexStatus)
-        expect(status?.text.contains("63%") == true, "Codex status should render the 7-day percentage")
-        expect(status?.text.contains("7-day") == true, "Codex status should identify the 7-day window")
+        expectEqual(info.title, "Codex Reset Tray", "popover title")
+        expectEqual(info.usageValue, "63%", "popover keeps the usage headline")
+        expectEqual(info.usageCaption, "7-day Codex usage", "popover keeps the usage caption")
+        expectEqual(info.usageFraction, 0.63, "popover keeps the usage meter")
+        expectEqual(
+            info.forecastFigures,
+            [
+                TrayForecastFigure(horizon: "24h", value: "28%", caption: "within 24h"),
+                TrayForecastFigure(horizon: "48h", value: "49%", caption: "within 48h"),
+            ],
+            "popover replaces the forecast sentence with two large figures"
+        )
+        expectEqual(info.forecastState, .current, "current forecast state")
+        expect(info.forecastStatus == nil, "current forecast adds no status line")
+        expect(
+            info.forecastToolTip?.contains("28% within 24 hours") == true,
+            "forecast detail stays available in the tooltip"
+        )
+    }
 
-        let summary = info.row(withRole: .forecastSummary)
-        expectEqual(summary?.tone, .normal, "available forecast should not render as an error")
-        expect(summary?.text.contains("28% within 24h") == true, "forecast should render 24h probability")
-        expect(summary?.text.contains("49% within 48h") == true, "forecast should render 48h probability")
-        expect(summary?.toolTip?.contains("28% within 24 hours") == true, "forecast summary tooltip")
+    private static func testInfoCompactLoadingAndAbsentUsage() {
+        let idle = TrayInfoModel.make(state: TrayMenuState())
+        expectEqual(idle.usageValue, "--", "unknown usage headline")
+        expectEqual(idle.usageCaption, "7-day Codex usage unavailable", "unknown usage caption")
+        expectEqual(idle.usageFraction, nil, "unknown usage hides the meter")
+        expectEqual(idle.forecastFigures.map(\.value), ["--", "--"], "loading figures are placeholders")
+        expectEqual(idle.forecastState, .loading, "idle forecast is a loading state")
+        expectEqual(idle.forecastStatus?.text, "Forecast not loaded yet.", "idle status text")
+        expectEqual(idle.forecastStatus?.tone, .normal, "idle status is normal, not disabled gray")
 
-        let detail = info.row(withRole: .forecastDetail)
-        expect(detail?.text.contains("Latest confirmed reset") == true, "forecast detail should render")
-        expect(detail?.text.contains("Quota restored") == true, "restoration status should render")
-        expect(detail?.toolTip?.contains("Monitored account") == true, "restoration detail tooltip")
+        let fetching = TrayInfoModel.make(
+            state: TrayMenuState(isPollingCodex: true, isFetchingForecast: true)
+        )
+        expectEqual(fetching.forecastStatus?.text, "Loading forecast…", "fetching status text")
+        expectEqual(fetching.forecastStatus?.tone, .normal, "loading status is normal, not gray")
+        expect(
+            fetching.forecastFigures.allSatisfy { $0.value == "--" },
+            "fetching state keeps the two-column figure layout"
+        )
     }
 
     private static func testInfoForecastErrorRendering() {
@@ -235,153 +343,89 @@ struct TrayMenuTests {
             state: TrayMenuState(forecastError: message, lastForecastCheck: menuTestNow)
         )
 
-        let summary = info.row(withRole: .forecastSummary)
-        expectEqual(summary?.tone, .error, "forecast failure should be marked as an error")
-        expect(summary?.text.contains("Forecast error") == true, "forecast error label")
-        expect(summary?.text.contains(message) == true, "forecast error message should render")
+        expectEqual(
+            info.forecastState,
+            .unavailable(error: message),
+            "forecast failure without cached data is unavailable"
+        )
+        expectEqual(info.forecastStatus?.tone, .error, "forecast failure uses the error tone")
+        expectEqual(
+            info.forecastStatus?.text,
+            "Forecast unavailable: codexreset.org returned HTTP 503.",
+            "forecast error status text"
+        )
+        expectEqual(
+            info.forecastFigures.map(\.value),
+            ["--", "--"],
+            "an unavailable forecast still shows both figure columns"
+        )
+        expect(
+            info.forecastToolTip?.contains("Refresh failed: \(message)") == true,
+            "forecast error remains in the tooltip"
+        )
     }
 
     private static func testInfoCachedForecastAndFreshErrorBothRender() {
         let message = "codexreset.org returned HTTP 503."
-        let info = TrayInfoModel.make(
-            state: TrayMenuState(forecast: forecast(), forecastError: message, lastForecastSuccess: menuTestNow)
-        )
-
-        let summary = info.row(withRole: .forecastSummary)
-        expectEqual(summary?.tone, .error, "stale probabilities should be marked")
-        expect(summary?.text.contains("28% within 24h") == true, "cached 24h probability")
-        expect(summary?.text.contains("stale, updated") == true, "cached forecast needs a freshness label")
-
-        let detail = info.row(withRole: .forecastDetail)
-        expectEqual(detail?.tone, .error, "fresh forecast error should render on the detail line")
-        expect(detail?.text.contains(message) == true, "fresh forecast error message")
-    }
-
-    private static func testInfoCodexErrorRendering() {
-        let message = "Codex app-server did not respond within 10 seconds."
+        let success = menuTestNow.addingTimeInterval(-120)
         let info = TrayInfoModel.make(
             state: TrayMenuState(
-                snapshot: snapshot(),
-                codexError: message,
-                lastCodexCheck: menuTestNow
+                forecast: forecast(),
+                forecastError: message,
+                lastForecastSuccess: success
             )
         )
 
-        let status = info.row(withRole: .codexStatus)
-        expectEqual(status?.tone, .error, "Codex failure should be marked as an error")
-        expect(status?.text.contains(message) == true, "Codex error message should render")
-        expect(
-            info.row(withRole: .codexWindows)?.text.contains("63%") == true,
-            "last known usage remains visible with an error"
-        )
-    }
-
-    private static func testInfoNotificationStatusRendering() {
-        let allowed = TrayInfoModel.make(
-            state: TrayMenuState(notificationStatus: "Notifications are allowed.")
-        )
-        let allowedRow = allowed.row(withRole: .notificationStatus)
-        expectEqual(allowedRow?.text, "Notifications are allowed.", "allowed status is visible")
-        expectEqual(allowedRow?.tone, .normal, "allowed status is not an error")
-
-        let denied = TrayInfoModel.make(
-            state: TrayMenuState(
-                notificationStatus: "Notifications are denied in System Settings; reset alerts cannot be scheduled.",
-                notificationStatusIsError: true
-            )
-        )
-        let deniedRow = denied.row(withRole: .notificationStatus)
-        expectEqual(deniedRow?.tone, .error, "denied notifications render as an error")
-        expect(
-            deniedRow?.text.contains("denied in System Settings") == true,
-            "denied notification status is visible in the popover"
-        )
-
-        let scheduled = TrayInfoModel.make(
-            state: TrayMenuState(
-                notificationStatus: "Reset notification scheduled. Visual delivery depends on macOS settings."
-            )
-        )
-        let scheduledRow = scheduled.row(withRole: .notificationStatus)
+        expectEqual(info.forecastFigures.map(\.value), ["28%", "49%"], "cached figures stay visible")
         expectEqual(
-            scheduledRow?.text,
-            "Reset notification scheduled. Visual delivery depends on macOS settings.",
-            "scheduled request is distinguished from visual delivery"
+            info.forecastState,
+            .stale(updated: TrayInfoModel.dateText(success), error: message),
+            "cached forecast with a fresh error is stale"
+        )
+        expectEqual(info.forecastStatus?.tone, .error, "stale forecast is not gray informational text")
+        expect(
+            info.forecastStatus?.text.contains("Stale forecast · updated") == true,
+            "stale forecast shows its freshness"
         )
         expect(
-            scheduledRow?.toolTip?.contains("does not confirm that a banner was displayed") == true,
-            "notification tooltip explains that scheduling is not proof of display"
+            info.forecastStatus?.text.contains(message) == true,
+            "stale forecast keeps the refresh error"
+        )
+        expect(
+            info.forecastToolTip?.contains("Refresh failed: \(message)") == true,
+            "stale tooltip keeps the refresh error"
         )
     }
 
-    private static func testInfoLoadingRendering() {
-        let info = TrayInfoModel.make(
-            state: TrayMenuState(isPollingCodex: true, isFetchingForecast: true)
-        )
-        expect(
-            info.row(withRole: .codexStatus)?.text.contains("reading usage") == true,
-            "loading Codex state should render"
-        )
-        expect(
-            info.row(withRole: .forecastSummary)?.text.contains("fetching") == true,
-            "fetching forecast state should render"
-        )
-    }
-
-    private static func testInfoPreservesAllData() {
-        let scheduledAt = menuTestNow.addingTimeInterval(-900)
-        let lastSuccess = menuTestNow.addingTimeInterval(-120)
+    private static func testInfoRemovedContentAbsent() {
         let state = TrayMenuState(
             snapshot: snapshot(),
+            codexError: "Codex app-server did not respond within 10 seconds.",
             baseline: baseline(),
-            lastNotificationScheduledAt: scheduledAt,
-            notificationStatus: "Notifications are allowed.",
+            lastNotificationScheduledAt: menuTestNow.addingTimeInterval(-900),
+            notificationStatus: "Notifications are denied in System Settings.",
+            notificationStatusIsError: true,
             forecast: forecast(),
             lastCodexCheck: menuTestNow,
             lastForecastCheck: menuTestNow,
-            lastForecastSuccess: lastSuccess
+            lastForecastSuccess: menuTestNow,
+            showsUsageInMenuBar: false
         )
         let info = TrayInfoModel.make(state: state)
+        let description = String(describing: info)
 
-        expect(info.row(withRole: .codexStatus)?.text.contains("7-day Codex usage: 63%") == true,
-               "popover keeps status usage")
-        expect(info.row(withRole: .codexWindows)?.text.contains("Primary 5-hour: 40%") == true,
-               "popover keeps primary usage window")
-        expect(info.row(withRole: .codexWindows)?.text.contains("Secondary 7-day: 63%") == true,
-               "popover keeps secondary usage window")
-        expect(info.row(withRole: .codexMeta)?.text.hasPrefix("Baseline: 72%") == true,
-               "popover keeps baseline and reset deadline")
-        expect(info.row(withRole: .notificationStatus)?.text == "Notifications are allowed.",
-               "popover keeps notification permission state")
-        expect(info.row(withRole: .forecastSummary)?.text.contains("28% within 24h") == true,
-               "popover keeps forecast probabilities")
-        expect(info.row(withRole: .forecastDetail)?.text.contains("Latest confirmed reset") == true,
-               "popover keeps reset detail")
-
-        let metaToolTip = info.row(withRole: .codexMeta)?.toolTip
-        expect(metaToolTip?.contains("Ordinary usage allowed: yes") == true,
-               "popover keeps ordinary usage allowance")
-        expect(metaToolTip?.contains("Codex read at") == true,
-               "popover keeps Codex observation time")
-        expect(metaToolTip?.contains("Reset notification request scheduled at") == true,
-               "popover keeps scheduled notification request")
-        expect(info.row(withRole: .forecastSummary)?.toolTip == forecast().forecastSummary,
-               "popover keeps forecast summary")
-        expect(info.row(withRole: .forecastDetail)?.toolTip?.contains("Monitored account") == true,
-               "popover keeps restoration detail")
-
-        for expected in [
-            "Last Codex check:",
-            "Last forecast check:",
-            "Menu bar 7d label: shown",
-            "Ordinary usage allowed: yes",
-            "Codex read at:",
-            "Last reset notification request:",
-            "Forecast last updated:",
+        for removed in [
+            "Latest confirmed reset",
+            "Last Codex check",
+            "Last forecast check",
+            "Menu bar 7d label",
+            "Ordinary usage allowed",
+            "Notifications are denied",
+            "Version ",
         ] {
             expect(
-                info.footer.contains { $0.hasPrefix(expected) },
-                "popover footer must keep '\(expected)' (got \(info.footer))"
+                !description.contains(removed),
+                "compact popover model must not retain '\(removed)' (got \(description))"
             )
         }
     }
@@ -405,10 +449,18 @@ struct TrayMenuTests {
         )
     }
 
+    private static func testNotificationSettingsURL() {
+        expectEqual(
+            TrayMenuModel.notificationSettingsURL.absoluteString,
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
+            "denied/allowed notification clicks must open the Notifications pane"
+        )
+    }
+
     private static func testMenuBarUsageToggleModel() {
         let shown = TrayMenuModel.make(state: TrayMenuState())
         let shownItem = shown.item(withRole: .action(.toggleMenuBarUsage))
-        expectEqual(shownItem?.title, "Hide 7d Label", "visible label must offer a clear hide action")
+        expectEqual(shownItem?.title, "Show 7d Label", "visible label must keep the exact toggle title")
         expectEqual(shownItem?.isChecked, true, "usage label is visible by default")
         expect(shownItem?.isEnabled == true, "toggle must always be enabled")
         expect(
@@ -425,7 +477,7 @@ struct TrayMenuTests {
             state: TrayMenuState(showsUsageInMenuBar: false)
         )
         let hiddenItem = hidden.item(withRole: .action(.toggleMenuBarUsage))
-        expectEqual(hiddenItem?.title, "Show 7d Label", "hidden label must offer a clear show action")
+        expectEqual(hiddenItem?.title, "Show 7d Label", "hidden label must keep the exact toggle title")
         expectEqual(hiddenItem?.isChecked, false, "hiding the label must clear the check mark")
         expect(
             hiddenItem?.toolTip?.contains("icon is always visible") == true,
@@ -440,11 +492,11 @@ struct TrayMenuTests {
         )
         let errorItem = TrayMenuModel.make(state: errorState)
             .item(withRole: .action(.toggleMenuBarUsage))
-        expectEqual(errorItem?.title, "Show 7d Label", "toggle title must survive error states")
+        expectEqual(errorItem?.title, "Show 7d Label", "toggle title must stay exact in error states")
         expectEqual(errorItem?.isChecked, false, "toggle state must survive error states")
     }
 
-    private static func testCopyStatusSummary() {
+    private static func testCopyStatusSummaryPreservesDiagnostics() {
         let state = TrayMenuState(
             snapshot: snapshot(),
             baseline: baseline(),
@@ -459,6 +511,7 @@ struct TrayMenuTests {
         expect(summary.contains("7-day Codex usage: 63%"), "summary 7-day usage")
         expect(summary.contains("Baseline: 72%"), "summary baseline")
         expect(summary.contains("Forecast: 28% within 24h"), "summary forecast")
+        expect(summary.contains("Latest confirmed reset:"), "summary keeps reset detail")
         expect(summary.contains("Notifications are allowed."), "summary notifications")
         expect(
             summary.contains("Last reset notification request:")
@@ -527,39 +580,12 @@ struct TrayMenuTests {
         expectEqual(populated.title, "Codex Reset Tray", "info title")
         expectEqual(populated.usageValue, "63%", "info headline")
         expectEqual(populated.usageFraction, 0.63, "info meter fraction")
-        expectEqual(populated.sections.map(\.title), ["Codex usage", "Reset forecast"], "info sections")
-        expectEqual(
-            populated.sections[0].rows.map(\.role),
-            [.codexStatus, .codexWindows, .codexMeta, .notificationStatus],
-            "info Codex row roles"
-        )
-        expectEqual(
-            populated.sections[1].rows.map(\.role),
-            [.forecastSummary, .forecastDetail],
-            "info forecast row roles"
-        )
-        expect(populated.footer.contains { $0.hasPrefix("Last Codex check:") }, "info footer Codex check")
-        expect(populated.footer.contains { $0.hasPrefix("Last forecast check:") }, "info footer forecast check")
-        expect(populated.footer.contains("Menu bar 7d label: shown"), "info footer label state")
+        expectEqual(populated.forecastFigures.count, 2, "info forecast figure count")
+        expectEqual(populated.forecastState, .current, "info current forecast")
 
         let hidden = TrayInfoModel.make(state: TrayMenuState(showsUsageInMenuBar: false))
-        expect(hidden.footer.contains("Menu bar 7d label: hidden"), "info footer hidden label state")
         expectEqual(hidden.usageValue, "--", "unknown usage headline")
         expectEqual(hidden.usageFraction, nil, "unknown usage hides the meter")
-
-        let errors = TrayInfoModel.make(
-            state: TrayMenuState(
-                snapshot: snapshot(),
-                codexError: "Codex unavailable",
-                forecastError: "HTTP 503"
-            )
-        )
-        expectEqual(errors.row(withRole: .codexStatus)?.tone, .error,
-                    "Codex error row keeps the error tone")
-        expectEqual(errors.row(withRole: .forecastSummary)?.tone, .error,
-                    "forecast error row keeps the error tone")
-        expect(errors.row(withRole: .codexStatus)?.text.contains("Codex unavailable") == true,
-               "Codex error text")
 
         let overflow = TrayInfoModel.make(
             state: TrayMenuState(
@@ -586,7 +612,8 @@ struct TrayMenuTests {
             notificationStatus: "Notifications are allowed.",
             forecast: forecast(),
             lastCodexCheck: menuTestNow,
-            lastForecastCheck: menuTestNow
+            lastForecastCheck: menuTestNow,
+            notificationPermission: .allowed
         )
     }
 
