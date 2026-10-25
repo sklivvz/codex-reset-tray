@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MARKETING_VERSION: "0.2.0"
+  MARKETING_VERSION: "0.3.0"
   BUILD_NUMBER: "1"
   BUILD_ARCHS: "arm64 x86_64"
 

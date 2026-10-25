@@ -4,7 +4,7 @@ import Foundation
 /// diagnostic summary. Values come from the built app bundle in production and
 /// fall back to the source defaults when the code runs as a command-line test.
 enum AppBuildInfo {
-    static let fallbackVersion = "0.2.0"
+    static let fallbackVersion = "0.3.0"
     static let fallbackBuild = "1"
     static let copyright = "Copyright © 2026 sklivvz"
     static let projectURL = URL(string: "https://github.com/sklivvz/codex-reset-tray")!

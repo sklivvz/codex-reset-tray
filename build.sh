@@ -9,7 +9,7 @@ BIN_STAGE="$BUILD_DIR/.bin"
 CACHE_DIR="$ROOT/.build/swift-module-cache"
 ICON="$ROOT/Resources/AppIcon.icns"
 
-MARKETING_VERSION=${MARKETING_VERSION:-0.2.0}
+MARKETING_VERSION=${MARKETING_VERSION:-0.3.0}
 BUILD_NUMBER=${BUILD_NUMBER:-1}
 BUILD_ARCHS=${BUILD_ARCHS:-$(uname -m)}
 BUNDLE_ID="io.github.sklivvz.codex-reset-tray"

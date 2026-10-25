@@ -12,14 +12,11 @@ notifications.
 
 ## Download for macOS
 
-[**Download Codex Reset Tray v0.1.0 — Universal (Apple Silicon + Intel)**](https://github.com/sklivvz/codex-reset-tray/releases/download/v0.1.0/CodexResetTray-v0.1.0-macos-universal.dmg)
+[**Download Codex Reset Tray v0.3.0 — Universal (Apple Silicon + Intel)**](https://github.com/sklivvz/codex-reset-tray/releases/download/v0.3.0/CodexResetTray-v0.3.0-macos-universal.dmg)
 
-- Direct DMG: [`CodexResetTray-v0.1.0-macos-universal.dmg`](https://github.com/sklivvz/codex-reset-tray/releases/download/v0.1.0/CodexResetTray-v0.1.0-macos-universal.dmg)
-- SHA-256: [`CodexResetTray-v0.1.0-macos-universal.dmg.sha256`](https://github.com/sklivvz/codex-reset-tray/releases/download/v0.1.0/CodexResetTray-v0.1.0-macos-universal.dmg.sha256)
+- Direct DMG: [`CodexResetTray-v0.3.0-macos-universal.dmg`](https://github.com/sklivvz/codex-reset-tray/releases/download/v0.3.0/CodexResetTray-v0.3.0-macos-universal.dmg)
+- SHA-256: [`CodexResetTray-v0.3.0-macos-universal.dmg.sha256`](https://github.com/sklivvz/codex-reset-tray/releases/download/v0.3.0/CodexResetTray-v0.3.0-macos-universal.dmg.sha256)
 - All releases: <https://github.com/sklivvz/codex-reset-tray/releases>
-
-The fixes described below are in the current source and are not included in the
-v0.1.0 download.
 
 The DMG contains `CodexResetTray.app`, an `Applications` shortcut for
 drag-to-install, a short README, `LICENSE`, and `NOTICE`.
@@ -39,7 +36,7 @@ signature/contents are checked by the packaging script; see
 To verify the download:
 
 ```sh
-shasum -a 256 -c CodexResetTray-v0.1.0-macos-universal.dmg.sha256
+shasum -a 256 -c CodexResetTray-v0.3.0-macos-universal.dmg.sha256
 ```
 
 ## Menu-bar usage toggle
