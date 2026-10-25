@@ -5,8 +5,6 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-10-25
-
 - Adds a Support this project action and repository funding link to the active
   PayPal.Me/sklivvz recipient page.
 
