@@ -40,12 +40,3 @@ jobs:
 
       - name: Package and validate universal DMG
         run: ./scripts/package-release.sh
-
-      - name: Upload DMG artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: CodexResetTray-v0.2.0-macos-universal
-          path: |
-            dist/*.dmg
-            dist/*.sha256
-          if-no-files-found: error
