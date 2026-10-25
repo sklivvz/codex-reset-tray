@@ -41,11 +41,17 @@ shasum -a 256 -c CodexResetTray-v0.1.0-macos-universal.dmg.sha256
 
 ## Menu-bar usage toggle
 
-The menu-bar item always shows a bar-chart icon. By default it also shows the
-current 7-day usage text, for example `7d 89%`.
+The menu-bar item always shows the app icon (derived from the packaged
+`AppIcon.icns`, in color). By default it also shows the current 7-day usage
+text, for example `7d 89%`, a compact 4 pt to the right of the icon.
 
-- **Show Usage in Menu Bar** is a native checked menu item.
-- It is checked by default and can be toggled off to leave only the icon.
+- **Left click** opens an information window with the 7-day usage, usage
+  windows, baseline, forecast, and any errors. It updates while open.
+- **Right click** (or control-click) opens the actions menu.
+
+- **Hide 7d Label** is a native checked menu item directly below the heading.
+- It is checked by default. Selecting it hides the `7d 89%` text, clears the
+  check mark, and changes the item to **Show 7d Label**, leaving only the icon.
 - The choice persists in `UserDefaults` under the key
   `codexShowUsageInMenuBar` and is restored on the next launch.
 - The icon itself is never hidden by this setting, including in error states.
@@ -109,13 +115,13 @@ the first usage fetch has begun.
 The menu shows primary/secondary windows, the persisted baseline and deadline,
 notification permission/delivery state, the latest forecast or forecast error,
 and any Codex error. `ordinaryUsageAllowed`, the last read time, and alert timing
-are available in item tooltips. Refresh, Copy Status Summary, Show Usage in Menu
-Bar, Open codexreset.org, and Quit are always in the menu; Quit is always enabled
-and last.
+are available in item tooltips. Refresh, Copy Status Summary, Hide/Show 7d Label,
+Open codexreset.org, and Quit are always in the menu; Quit is enabled and last.
 
 ### codexreset.org forecast
 
-- Forecasts are fetched only when the menu opens or when Refresh is pressed.
+- Forecasts are fetched when the menu or information window opens, or when
+  Refresh is pressed.
 - Refresh also re-polls Codex usage immediately.
 - The forecast shows 24-hour and 48-hour probabilities in the menu, with the
   latest reported restoration and forecast summary available there and in its
@@ -165,10 +171,18 @@ opener, and a fake termination handler. It exercises real `NSMenu` and
 `NSMenuItem` instances and checks:
 
 - the menu is nonempty before and on the first open;
-- the status button has a renderable template image with nontransparent pixels;
+- the status button image is rendered from `Resources/AppIcon.icns` and matches
+  the icon's pixels, with the SF Symbol only as a fallback;
+- the icon-label gap is 4 pt, measured from a laid-out button, and disappears
+  with the label when it is hidden;
+- left and right clicks (synthetic `NSEvent`s through the button's real
+  target/action) open the information window and the actions menu respectively;
+  the window is an injected fake and its content `NSView` is rendered offscreen;
+- the window follows source updates while open, and informational and error rows
+  are never grayed out (error text meets WCAG AA contrast in light and dark);
 - status, usage-window, baseline, forecast, forecast-detail, and error rows;
-- the checked **Show Usage in Menu Bar** toggle in both states, with the icon
-  still renderable while the text is hidden;
+- the checked **Hide 7d Label** / **Show 7d Label** toggle in both states, with
+  the icon still renderable while the text is hidden;
 - the `codexShowUsageInMenuBar` preference persists through a store restart and
   defaults to visible;
 - Refresh, Copy Status Summary, Open codexreset.org, and Quit wiring;
@@ -176,8 +190,8 @@ opener, and a fake termination handler. It exercises real `NSMenu` and
 
 The harness creates an `NSApplication` object only so `NSMenu` can dispatch item
 actions. It never calls `run` or `finishLaunching`, never creates an
-`NSStatusItem`, activates the app, shows a window, clicks anything, or launches
-the app bundle. It also does not use screenshots, Accessibility UI inspection,
+`NSStatusItem`, activates the app, shows a window, clicks anything on screen, or
+launches the app bundle. It also does not use screenshots, Accessibility UI inspection,
 AppleScript, `CGWindowList`, or the `open` command.
 
 **This is not a GUI test.** Actual menu-bar rendering/positioning, the real

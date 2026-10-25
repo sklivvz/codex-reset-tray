@@ -72,8 +72,9 @@ This build is ad-hoc signed and is not notarized by Apple. On first launch,
 macOS may require right-click > Open, or System Settings > Privacy & Security >
 Open Anyway.
 
-After launch, click the menu-bar icon. Use "Show Usage in Menu Bar" to hide or
-show the usage text; the icon always remains visible.
+After launch, left-click the menu-bar icon for details or right-click it for the
+actions menu. Use "Hide 7d Label" or "Show 7d Label" directly below the heading
+to hide or show the usage text; the icon always remains visible.
 
 Project: https://github.com/sklivvz/codex-reset-tray
 License: MIT (see LICENSE). See NOTICE for attribution and trademarks.

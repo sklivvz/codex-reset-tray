@@ -18,6 +18,20 @@ All notable changes are documented here. This project follows
 - Commit the per-window alert marker only after the notification scheduler
   accepts the request. Authorization and scheduling failures are shown in a
   dedicated menu row, and the prior baseline is retained for retry.
+- Status and forecast rows are no longer grayed out; only genuinely unavailable
+  controls are disabled. Error text uses a color with WCAG AA contrast in light
+  and dark appearances.
+- Left-clicking the status icon opens an information window (7-day usage,
+  windows, baseline, forecast, errors) that updates while open. Right-clicking
+  (or control-clicking) opens the actions menu.
+- The menu-bar icon is now the packaged `AppIcon.icns` in color instead of an SF
+  Symbol; the symbol remains only as a fallback.
+- The gap between the icon and the usage label is a compact 4 pt.
+
+- Makes the 7-day label toggle prominent directly below the menu heading and
+  changes its title to **Hide 7d Label** or **Show 7d Label** so the current
+  action is unambiguous. The native check mark, icon-only mode, and persisted
+  `codexShowUsageInMenuBar` preference are unchanged.
 
 ## [0.1.0] - 2026-10-24
 
