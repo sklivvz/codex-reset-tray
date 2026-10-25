@@ -139,7 +139,7 @@ struct TrayMenuTests {
         expect(summary?.toolTip?.contains("28% within 24 hours") == true, "forecast summary tooltip")
 
         let detail = model.item(withRole: .forecastDetail)
-        expect(detail?.title.contains("Latest restoration") == true, "forecast detail should render")
+        expect(detail?.title.contains("Latest confirmed reset") == true, "forecast detail should render")
         expect(detail?.title.contains("Quota restored") == true, "restoration status should render")
     }
 

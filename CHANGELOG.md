@@ -5,6 +5,10 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+- Parse the current codexreset.org layout when `quota-restoration-status` is
+  absent, while reporting timeline confirmations as global-only and preserving
+  strict timestamp and forecast-probability validation.
+
 - Adds a Support this project action and repository funding link to the active
   PayPal.Me/sklivvz recipient page.
 

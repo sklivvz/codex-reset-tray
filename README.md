@@ -127,8 +127,10 @@ Open codexreset.org, and Quit are always in the menu; Quit is enabled and last.
   Refresh is pressed.
 - Refresh also re-polls Codex usage immediately.
 - The forecast shows 24-hour and 48-hour probabilities in the menu, with the
-  latest reported restoration and forecast summary available there and in its
-  tooltip.
+  latest confirmed reset (and account-level restoration when the site reports
+  it) and forecast summary available there and in its tooltip.
+- If the site only confirms a reset on its global timeline, the tooltip labels
+  that as global and does not claim the monitored account was restored.
 - A failed refresh keeps the last forecast visible as stale and shows when it
   was last updated. Opening the menu retries after a failure.
 - The site is never consulted for notification decisions.

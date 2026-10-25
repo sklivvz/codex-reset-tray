@@ -27,12 +27,7 @@ struct ResetSnapshot: Equatable, Sendable {
         guard let title, !title.isEmpty else {
             throw ParseError.missing("reset status")
         }
-        let confirmation = section(after: "Latest confirmed", in: html).map { String($0.prefix(160)) }
-        let restoration = element(with: "data-testid", value: "quota-restoration-status", in: html).map { clean($0.content) }
-            ?? (confirmation?.contains("Confirmed reset") == true ? "Confirmed reset" : nil)
-        guard let restoration, !restoration.isEmpty else {
-            throw ParseError.missing("restoration status")
-        }
+        let restoration = try restorationStatus(in: html)
         let probability24h = try probability(hours: 24, in: html)
         let probability48h = try probability(hours: 48, in: html)
         let summary = element(with: "data-testid", value: "forecast-summary", in: html).map { clean($0.content) }
@@ -86,6 +81,59 @@ struct ResetSnapshot: Equatable, Sendable {
             throw ParseError.invalid("\(hours)-hour forecast")
         }
         return value
+    }
+
+    private static func restorationStatus(in html: String) throws -> String {
+        if let restorationElement = element(with: "data-testid", value: "quota-restoration-status", in: html) {
+            let status = clean(restorationElement.content)
+            guard !status.isEmpty else {
+                throw ParseError.invalid("restoration status")
+            }
+            return status
+        }
+
+        // The current page no longer exposes an account-level restoration element.
+        // Its timeline only confirms a global reset, so never present that as proof
+        // that the monitored account's quota was restored.
+        if hasGlobalTimelineConfirmation(in: html) {
+            return "Global timeline: Confirmed reset (account-level restoration not stated)."
+        }
+        throw ParseError.missing("restoration status")
+    }
+
+    private static func hasGlobalTimelineConfirmation(in html: String) -> Bool {
+        guard let timeline = timelineRegion(in: html) else { return false }
+        let text = clean(timeline)
+        // clean() removes adjacent tags without inserting whitespace, so word-boundary
+        // regexes can miss labels such as "</button><span>Confirmed reset".
+        return text.localizedCaseInsensitiveContains("Latest confirmed")
+            && text.localizedCaseInsensitiveContains("Confirmed reset")
+    }
+
+    /// Scope semantic timeline checks to the actual timeline. The live page also
+    /// contains JSON-LD and FAQ prose such as "after the latest confirmed reset";
+    /// scanning the whole document would treat that prose as timeline evidence.
+    private static func timelineRegion(in html: String) -> String? {
+        let openingPatterns = [
+            #"<section\b[^>]*\bid\s*=\s*["']timeline["'][^>]*>"#,
+            #"<h2\b[^>]*\bid\s*=\s*["']timeline-title["'][^>]*>"#,
+        ]
+        for pattern in openingPatterns {
+            if let tag = firstCapture("(" + pattern + ")", in: html),
+               let range = html.range(of: tag) {
+                return String(html[range.upperBound...].prefix(20_000))
+            }
+        }
+
+        // Support the id-less variant by anchoring to the visible heading element.
+        // Matching the bare phrase would also find document metadata such as the
+        // <title> or JSON-LD that appears before the visible timeline.
+        let headingPattern = #"<h2\b[^>]*>\s*Codex reset timeline\s*</h2\s*>"#
+        if let heading = firstCapture("(" + headingPattern + ")", in: html),
+           let range = html.range(of: heading) {
+            return String(html[range.upperBound...].prefix(20_000))
+        }
+        return nil
     }
 
     private static func section(after marker: String, in html: String) -> String? {

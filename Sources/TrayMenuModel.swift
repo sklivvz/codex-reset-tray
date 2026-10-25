@@ -426,7 +426,7 @@ struct TrayMenuModel: Equatable {
             }
             return TrayMenuItem(
                 role: .forecastDetail,
-                title: "Latest restoration: \(dateText(forecast.resetAt)) · \(forecast.resetStatus)",
+                title: "Latest confirmed reset: \(dateText(forecast.resetAt)) · \(forecast.resetStatus)",
                 tone: .normal,
                 isEnabled: true,
                 toolTip: toolTipParts.joined(separator: "\n")
