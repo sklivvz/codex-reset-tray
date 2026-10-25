@@ -13,6 +13,7 @@ enum TrayMenuItemRole: Hashable {
     case codexStatus
     case codexWindows
     case codexMeta
+    case notificationStatus
     case separator
     case forecastSummary
     case forecastDetail
@@ -40,6 +41,7 @@ struct TrayMenuState: Equatable {
     var baseline: WeeklyUsageBaseline?
     var lastAlertAt: Date?
     var notificationStatus: String?
+    var notificationStatusIsError: Bool
     var forecast: ResetSnapshot?
     var forecastError: String?
     var isFetchingForecast: Bool
@@ -55,6 +57,7 @@ struct TrayMenuState: Equatable {
         baseline: WeeklyUsageBaseline? = nil,
         lastAlertAt: Date? = nil,
         notificationStatus: String? = nil,
+        notificationStatusIsError: Bool = false,
         forecast: ResetSnapshot? = nil,
         forecastError: String? = nil,
         isFetchingForecast: Bool = false,
@@ -69,6 +72,7 @@ struct TrayMenuState: Equatable {
         self.baseline = baseline
         self.lastAlertAt = lastAlertAt
         self.notificationStatus = notificationStatus
+        self.notificationStatusIsError = notificationStatusIsError
         self.forecast = forecast
         self.forecastError = forecastError
         self.isFetchingForecast = isFetchingForecast
@@ -103,6 +107,7 @@ struct TrayMenuModel: Equatable {
             codexStatusItem(state),
             codexWindowsItem(state),
             codexMetaItem(state),
+            notificationStatusItem(state),
             TrayMenuItem(role: .separator, title: "", tone: .normal, isEnabled: false, toolTip: nil),
             forecastSummaryItem(state),
             forecastDetailItem(state),
@@ -175,6 +180,7 @@ struct TrayMenuModel: Equatable {
             TrayMenuItemRole.codexStatus,
             .codexWindows,
             .codexMeta,
+            .notificationStatus,
             .forecastSummary,
             .forecastDetail,
         ] {
@@ -194,9 +200,6 @@ struct TrayMenuModel: Equatable {
         }
         if let lastSuccess = state.lastForecastSuccess {
             lines.append("Forecast last updated: \(dateText(lastSuccess))")
-        }
-        if let notificationStatus = state.notificationStatus {
-            lines.append("Notifications: \(notificationStatus)")
         }
         lines.append("Menu bar usage text: \(state.showsUsageInMenuBar ? "shown" : "hidden")")
         lines.append("This summary contains no account ID, credential, or local file path.")
@@ -334,6 +337,16 @@ struct TrayMenuModel: Equatable {
             tone: .normal,
             isEnabled: false,
             toolTip: toolTipParts.isEmpty ? nil : toolTipParts.joined(separator: "\n")
+        )
+    }
+
+    private static func notificationStatusItem(_ state: TrayMenuState) -> TrayMenuItem {
+        TrayMenuItem(
+            role: .notificationStatus,
+            title: state.notificationStatus ?? "Notifications: permission has not been requested yet.",
+            tone: state.notificationStatusIsError ? .error : .normal,
+            isEnabled: false,
+            toolTip: "Notification permission and delivery state for early-restoration alerts."
         )
     }
 

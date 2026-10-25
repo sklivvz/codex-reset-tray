@@ -41,9 +41,13 @@ struct CodexTests {
         testFirstReadingEstablishesBaseline()
         testEarlyRestorationAlertsOnce()
         testScheduledResetDoesNotAlert()
-        testBackendPermissionIsRequired()
+        testPermissionIsReportedNotRequired()
+        testCoverageAfterResetUsageClimbs()
+        testSmallPriorUsageResetAlerts()
         testNoAlertWithoutMaterialDrop()
         testNoAlertWithoutPriorDeadline()
+        testPostResetUsageIncreaseRequiresAdvancedDeadline()
+        testPartialResetDoesNotAlert()
         testPollFailurePreservesBaseline()
         try testParsingFailureProducesNoAlert()
         testMissingWeeklyWindowProducesNoAlert()
@@ -154,10 +158,15 @@ struct CodexTests {
         expectEqual(alert.previousPercent, 80, "alert prior usage")
         expectEqual(alert.currentPercent, 0, "alert current usage")
         expectEqual(alert.resetsAt, deadline, "alert uses prior deadline")
-        expectEqual(evaluation.baseline.alertedResetsAt, deadline, "alert gets persisted")
+        expectEqual(alert.ordinaryUsageAllowed, true, "alert carries backend permission")
+        expect(
+            evaluation.baseline.alertedResetsAt == nil,
+            "detector must not mark delivered before scheduling succeeds"
+        )
 
+        let committed = evaluation.baseline.markingAlerted(resetsAt: deadline)
         let repeated = RestorationDetector.evaluate(
-            previous: evaluation.baseline,
+            previous: committed,
             current: window(0, resetsAt: deadline),
             ordinaryUsageAllowed: true,
             now: now.addingTimeInterval(300)
@@ -169,7 +178,9 @@ struct CodexTests {
         let deadline = testNow.addingTimeInterval(86_400)
         let previous = baseline(80, deadline: deadline)
         let nextDeadline = deadline.addingTimeInterval(7 * 86_400)
-        for now in [deadline, deadline.addingTimeInterval(1)] {
+        // At the deadline and just before it, a new window is the scheduled
+        // rollover, not an early restoration.
+        for now in [deadline, deadline.addingTimeInterval(1), deadline.addingTimeInterval(-60)] {
             let evaluation = RestorationDetector.evaluate(
                 previous: previous,
                 current: window(0, resetsAt: nextDeadline),
@@ -180,7 +191,7 @@ struct CodexTests {
         }
     }
 
-    private static func testBackendPermissionIsRequired() {
+    private static func testPermissionIsReportedNotRequired() {
         let deadline = testNow.addingTimeInterval(86_400)
         let previous = baseline(80, deadline: deadline)
         let permissions: [Bool?] = [nil, false]
@@ -189,16 +200,59 @@ struct CodexTests {
                 previous: previous,
                 current: window(0, resetsAt: deadline),
                 ordinaryUsageAllowed: allowed,
-                now: deadline.addingTimeInterval(-60)
+                now: deadline.addingTimeInterval(-3_600)
             )
-            expect(evaluation.alert == nil, "missing or false ordinaryUsageAllowed must suppress alert")
+            expect(evaluation.alert != nil, "strong usage restoration must not depend on permission")
+            expectEqual(
+                evaluation.alert?.ordinaryUsageAllowed,
+                allowed,
+                "alert must report the observed permission value"
+            )
         }
+    }
+
+    private static func testCoverageAfterResetUsageClimbs() {
+        // Regression: a reset-credit restoration can be followed by enough usage
+        // that the next poll sees 6%, not 0-1%. The old near-zero rule missed it
+        // and then overwrote the baseline, losing the evidence.
+        let deadline = testNow.addingTimeInterval(86_400)
+        let evaluation = RestorationDetector.evaluate(
+            previous: baseline(82, deadline: deadline),
+            current: window(6, resetsAt: deadline),
+            ordinaryUsageAllowed: true,
+            now: deadline.addingTimeInterval(-3_600)
+        )
+        guard let alert = evaluation.alert else {
+            expect(false, "82% -> 6% before the prior deadline should alert")
+            return
+        }
+        expectEqual(alert.previousPercent, 82, "regression alert prior usage")
+        expectEqual(alert.currentPercent, 6, "regression alert post-reset usage")
+        expect(evaluation.baseline.alertedResetsAt == nil, "regression alert is not pre-marked")
+    }
+
+    private static func testSmallPriorUsageResetAlerts() {
+        let deadline = testNow.addingTimeInterval(86_400)
+        let evaluation = RestorationDetector.evaluate(
+            previous: baseline(4, deadline: deadline),
+            current: window(0, resetsAt: deadline),
+            ordinaryUsageAllowed: true,
+            now: deadline.addingTimeInterval(-3_600)
+        )
+        expect(evaluation.alert != nil, "4% -> 0% should alert even though the drop is under five points")
     }
 
     private static func testNoAlertWithoutMaterialDrop() {
         let deadline = testNow.addingTimeInterval(86_400)
-        let now = deadline.addingTimeInterval(-60)
-        let cases: [(Double, Double)] = [(80, 2), (4, 0), (1, 0), (80, 80), (80, 90)]
+        let now = deadline.addingTimeInterval(-3_600)
+        let cases: [(Double, Double)] = [
+            (80, 80),       // no change
+            (80, 90),       // usage increased without a new deadline
+            (1, 0),         // one-point rounding noise
+            (30, 20),       // a 10-point drop is only one third of prior usage
+            (80, 40),       // still above the restored-usage ceiling
+            (80, 26),       // just above the restored-usage ceiling
+        ]
         for (prior, current) in cases {
             let evaluation = RestorationDetector.evaluate(
                 previous: baseline(prior, deadline: deadline),
@@ -209,6 +263,54 @@ struct CodexTests {
             expect(
                 evaluation.alert == nil,
                 "non-material drop \(prior)% -> \(current)% must not alert"
+            )
+        }
+    }
+
+    private static func testPostResetUsageIncreaseRequiresAdvancedDeadline() {
+        let deadline = testNow.addingTimeInterval(86_400)
+        let now = deadline.addingTimeInterval(-3_600)
+        let noNewWindow = RestorationDetector.evaluate(
+            previous: baseline(4, deadline: deadline),
+            current: window(6, resetsAt: deadline),
+            ordinaryUsageAllowed: true,
+            now: now
+        )
+        expect(noNewWindow.alert == nil, "usage growth alone must not alert")
+
+        let newWindow = RestorationDetector.evaluate(
+            previous: baseline(4, deadline: deadline),
+            current: window(6, resetsAt: deadline.addingTimeInterval(1_800)),
+            ordinaryUsageAllowed: nil,
+            now: now
+        )
+        expect(
+            newWindow.alert != nil,
+            "an advanced deadline with low usage should alert even after usage grows"
+        )
+    }
+
+    private static func testPartialResetDoesNotAlert() {
+        let deadline = testNow.addingTimeInterval(86_400)
+        let now = deadline.addingTimeInterval(-3_600)
+        for current in [40.0, 26.0] {
+            let sameDeadline = RestorationDetector.evaluate(
+                previous: baseline(80, deadline: deadline),
+                current: window(current, resetsAt: deadline),
+                ordinaryUsageAllowed: true,
+                now: now
+            )
+            expect(sameDeadline.alert == nil, "partial drop to \(current)% must not alert")
+
+            let advancedDeadline = RestorationDetector.evaluate(
+                previous: baseline(80, deadline: deadline),
+                current: window(current, resetsAt: deadline.addingTimeInterval(1_800)),
+                ordinaryUsageAllowed: true,
+                now: now
+            )
+            expect(
+                advancedDeadline.alert == nil,
+                "advanced deadline with usage still at \(current)% must not alert"
             )
         }
     }
@@ -230,6 +332,7 @@ struct CodexTests {
         expect(outcome.snapshot == nil, "failure does not replace displayed usage")
         expectEqual(outcome.baseline, prior, "failure preserves baseline")
         expect(outcome.alert == nil, "failure cannot alert")
+        expect(outcome.observedWeekly == nil, "failure reports no observed window")
         expect(outcome.errorMessage != nil, "failure reports an error")
     }
 
@@ -265,6 +368,7 @@ struct CodexTests {
         expect(outcome.snapshot != nil, "response is still displayed")
         expectEqual(outcome.baseline, prior, "baseline remains unchanged without a 7-day window")
         expect(outcome.alert == nil, "missing 7-day window cannot alert")
+        expect(outcome.observedWeekly == nil, "missing 7-day window is not reported as observed")
         expect(outcome.errorMessage != nil, "missing 7-day window is surfaced")
     }
 
@@ -276,22 +380,29 @@ struct CodexTests {
             now: testNow.addingTimeInterval(-600)
         )
         expect(first.alert == nil, "first poll establishes baseline only")
+        expect(first.observedWeekly != nil, "successful poll reports the observed weekly window")
         guard let firstBaseline = first.baseline else {
             expect(false, "first poll should persist a baseline")
             return
         }
 
         let restored = CodexPoller.apply(
-            .success(snapshot(weeklyUsed: 0, resetsAt: deadline, allowed: true)),
+            .success(snapshot(weeklyUsed: 6, resetsAt: deadline, allowed: true)),
             baseline: firstBaseline,
             now: deadline.addingTimeInterval(-3_600)
         )
-        expect(restored.alert != nil, "second poll detects early restoration")
+        expect(restored.alert != nil, "second poll detects early restoration even at 6%")
         expectEqual(restored.alert?.previousPercent, 63, "alert reflects persisted baseline")
+        guard let restoredBaseline = restored.baseline else {
+            expect(false, "restoration poll should return a baseline")
+            return
+        }
+        expect(restoredBaseline.alertedResetsAt == nil, "poll result is not pre-marked")
 
+        let committed = restoredBaseline.markingAlerted(resetsAt: deadline)
         let repeated = CodexPoller.apply(
-            .success(snapshot(weeklyUsed: 0, resetsAt: deadline, allowed: true)),
-            baseline: restored.baseline,
+            .success(snapshot(weeklyUsed: 6, resetsAt: deadline, allowed: true)),
+            baseline: committed,
             now: deadline.addingTimeInterval(-3_300)
         )
         expect(repeated.alert == nil, "third poll does not repeat the alert")
@@ -317,7 +428,7 @@ struct CodexTests {
             expect(false, "setup alert should fire")
             return
         }
-        store.save(evaluation.baseline)
+        store.save(evaluation.baseline.markingAlerted(resetsAt: deadline))
         guard let reloaded = store.load() else {
             expect(false, "alerted baseline should persist")
             return

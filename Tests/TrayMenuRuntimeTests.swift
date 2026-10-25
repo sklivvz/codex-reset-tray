@@ -160,6 +160,113 @@ func waitUntil(
     }
 }
 
+enum StubFetchError: Error {
+    case noMoreSnapshots
+}
+
+/// Deterministic stand-in for the app-server fetch. The closure is `@Sendable`
+/// because ResetStore owns it beyond the main actor.
+final class StubRateLimitFetcher: @unchecked Sendable {
+    private let lock = NSLock()
+    private var results: [Result<CodexRateLimitSnapshot, Error>]
+
+    init(_ results: [Result<CodexRateLimitSnapshot, Error>]) {
+        self.results = results
+    }
+
+    func next() throws -> CodexRateLimitSnapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !results.isEmpty else { throw StubFetchError.noMoreSnapshots }
+        return try results.removeFirst().get()
+    }
+}
+
+/// Deterministic stand-in for UserNotifications. It records every scheduling
+/// attempt and never asks the system, prompts, or displays anything.
+final class StubNotificationScheduler: NotificationScheduling, @unchecked Sendable {
+    private let lock = NSLock()
+    private var currentAuthorization: NotificationAuthorization
+    private var requestResults: [NotificationAuthorization]
+    private var scheduleResults: [NotificationDeliveryResult]
+    private var recordedAlerts: [RestorationAlert] = []
+
+    init(
+        authorization: NotificationAuthorization = .authorized,
+        requestResults: [NotificationAuthorization] = [],
+        scheduleResults: [NotificationDeliveryResult] = [.delivered]
+    ) {
+        currentAuthorization = authorization
+        self.requestResults = requestResults
+        self.scheduleResults = scheduleResults
+    }
+
+    var scheduledAlerts: [RestorationAlert] {
+        withLock { recordedAlerts }
+    }
+
+    var scheduleCallCount: Int {
+        withLock { recordedAlerts.count }
+    }
+
+    func authorizationStatus() async -> NotificationAuthorization {
+        withLock { currentAuthorization }
+    }
+
+    func requestAuthorization() async -> NotificationAuthorization {
+        withLock {
+            if !requestResults.isEmpty {
+                currentAuthorization = requestResults.removeFirst()
+            }
+            return currentAuthorization
+        }
+    }
+
+    func schedule(_ alert: RestorationAlert) async -> NotificationDeliveryResult {
+        withLock {
+            recordedAlerts.append(alert)
+            guard !scheduleResults.isEmpty else {
+                return .failed("stub scheduler has no queued result")
+            }
+            let result = scheduleResults.removeFirst()
+            if result == .delivered {
+                currentAuthorization = .authorized
+            }
+            return result
+        }
+    }
+
+    private func withLock<T>(_ body: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
+    }
+}
+
+func weeklySnapshot(
+    usedPercent: Double,
+    resetsAt: Date,
+    allowed: Bool? = true
+) -> CodexRateLimitSnapshot {
+    CodexRateLimitSnapshot(
+        ordinaryUsageAllowed: allowed,
+        primary: CodexRateLimitWindow(
+            usedPercent: usedPercent,
+            windowDurationMins: 10_080,
+            resetsAt: resetsAt
+        ),
+        secondary: nil,
+        observedAt: Date()
+    )
+}
+
+func makeStoreDefaults(_ label: String) -> (defaults: UserDefaults, suite: String) {
+    let suite = "CodexResetTrayRuntime.\(label).\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.removePersistentDomain(forName: suite)
+    return (defaults, suite)
+}
+
 func colorsEqual(_ lhs: NSColor?, _ rhs: NSColor) -> Bool {
     guard let lhs,
           let left = lhs.usingColorSpace(.sRGB),
@@ -530,7 +637,7 @@ func testCopyStatusActionWiring() {
         return
     }
     expect(copied.contains("7-day Codex usage: 63%"), "copied summary usage")
-    expect(copied.contains("Notifications: Notifications are allowed."), "copied summary notifications")
+    expect(copied.contains("Notifications are allowed."), "copied summary notifications")
     expect(!copied.contains("accountId"), "copied summary must not contain account IDs")
     expect(!copied.contains("/Users/"), "copied summary must not contain local paths")
     expectEqual(harness.recorder.terminatedCount, 0, "Copy Status Summary must not terminate")
@@ -734,6 +841,187 @@ func testOpenMenuUpdatesInPlaceAndCloseRebuilds() async {
     assertMenuMatchesModel(harness, "after close")
 }
 
+@MainActor
+func testNotificationFailureRetriesAndCommitsOnlyAfterSuccess() async {
+    let (defaults, suite) = makeStoreDefaults("notification-retry")
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let deadline = Date().addingTimeInterval(86_400)
+    let fetcher = StubRateLimitFetcher([
+        .success(weeklySnapshot(usedPercent: 80, resetsAt: deadline)),
+        .success(weeklySnapshot(usedPercent: 6, resetsAt: deadline)),
+        .success(weeklySnapshot(usedPercent: 6, resetsAt: deadline)),
+    ])
+    let scheduler = StubNotificationScheduler(
+        scheduleResults: [.failed("simulated scheduling failure"), .delivered]
+    )
+    let store = ResetStore(defaults: defaults, notifications: scheduler) {
+        try fetcher.next()
+    }
+
+    await store.pollCodex()
+    expectEqual(store.baseline?.usedPercent, 80, "first poll establishes the session baseline")
+
+    await store.pollCodex()
+    expectEqual(store.baseline?.usedPercent, 80, "scheduling failure keeps the pre-reset evidence")
+    expect(store.baseline?.alertedResetsAt == nil, "failure must not persist an alert marker")
+    expect(store.lastAlertAt == nil, "failure must not claim an alert was sent")
+    expect(store.notificationStatusIsError, "scheduling failure must be visible")
+    expect(
+        store.notificationStatus?.contains("Could not schedule") == true,
+        "scheduling failure status text"
+    )
+    expectEqual(scheduler.scheduleCallCount, 1, "first restoration attempts scheduling once")
+    let failedPersisted = BaselineStore(defaults: defaults).load()
+    expectEqual(failedPersisted?.usedPercent, 80, "failure keeps the persisted pre-reset baseline")
+    expect(failedPersisted?.alertedResetsAt == nil, "failure persists no alert marker")
+
+    await store.pollCodex()
+    expectEqual(store.baseline?.usedPercent, 6, "successful scheduling adopts the current reading")
+    expectEqual(store.baseline?.alertedResetsAt, deadline, "success commits the per-deadline marker")
+    expect(store.lastAlertAt != nil, "success records the alert time")
+    expect(!store.notificationStatusIsError, "success is not an error state")
+    expectEqual(scheduler.scheduleCallCount, 2, "failed scheduling is retried")
+
+    let persisted = BaselineStore(defaults: defaults).load()
+    expectEqual(persisted?.usedPercent, 6, "committed usage is persisted")
+    expectEqual(
+        persisted?.alertedResetsAt.map { Int($0.timeIntervalSince1970.rounded()) },
+        Int(deadline.timeIntervalSince1970.rounded()),
+        "committed marker is persisted"
+    )
+
+    let alerts = scheduler.scheduledAlerts
+    expectEqual(alerts.count, 2, "both attempts used the same restoration evidence")
+    expectEqual(alerts.first?.previousPercent, 80, "retry keeps prior usage")
+    expectEqual(alerts.first?.currentPercent, 6, "retry keeps post-reset usage")
+}
+
+@MainActor
+func testDeniedNotificationDoesNotCommitMarker() async {
+    let (defaults, suite) = makeStoreDefaults("notification-denied")
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let deadline = Date().addingTimeInterval(86_400)
+    let fetcher = StubRateLimitFetcher([
+        .success(weeklySnapshot(usedPercent: 80, resetsAt: deadline)),
+        .success(weeklySnapshot(usedPercent: 6, resetsAt: deadline)),
+    ])
+    let scheduler = StubNotificationScheduler(
+        authorization: .denied,
+        requestResults: [.denied],
+        scheduleResults: [.notAuthorized(.denied)]
+    )
+    let store = ResetStore(defaults: defaults, notifications: scheduler) {
+        try fetcher.next()
+    }
+
+    await store.pollCodex()
+    await store.pollCodex()
+
+    expectEqual(store.baseline?.usedPercent, 80, "denial preserves the pre-reset evidence")
+    expect(store.baseline?.alertedResetsAt == nil, "denial must not commit an alert marker")
+    expect(store.lastAlertAt == nil, "denial must not claim an alert was sent")
+    expect(store.notificationStatusIsError, "denial must be visible")
+    expect(
+        store.notificationStatus?.contains("denied in System Settings") == true,
+        "denial status must explain the system setting"
+    )
+    expectEqual(scheduler.scheduleCallCount, 1, "denied delivery was attempted once")
+}
+
+@MainActor
+func testStartupHistoricalStateDoesNotAlert() async {
+    let (defaults, suite) = makeStoreDefaults("startup-historical")
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let deadline = Date().addingTimeInterval(86_400)
+    BaselineStore(defaults: defaults).save(
+        WeeklyUsageBaseline(
+            usedPercent: 80,
+            resetsAt: deadline,
+            capturedAt: Date().addingTimeInterval(-600),
+            alertedResetsAt: nil
+        )
+    )
+    let fetcher = StubRateLimitFetcher([
+        .success(weeklySnapshot(usedPercent: 6, resetsAt: deadline)),
+    ])
+    let scheduler = StubNotificationScheduler()
+    let store = ResetStore(defaults: defaults, notifications: scheduler) {
+        try fetcher.next()
+    }
+
+    await store.pollCodex()
+
+    expectEqual(store.baseline?.usedPercent, 6, "startup adopts the current reading")
+    expect(store.baseline?.alertedResetsAt == nil, "startup does not mark an alert")
+    expect(store.lastAlertAt == nil, "startup does not alert on historical state")
+    expectEqual(scheduler.scheduleCallCount, 0, "startup must not schedule a notification")
+}
+
+@MainActor
+func testAuthorizationRequestErrorIsVisible() async {
+    let (defaults, suite) = makeStoreDefaults("authorization-error")
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let deadline = Date().addingTimeInterval(86_400)
+    let fetcher = StubRateLimitFetcher([
+        .success(weeklySnapshot(usedPercent: 80, resetsAt: deadline)),
+    ])
+    let scheduler = StubNotificationScheduler(
+        requestResults: [.error("simulated authorization failure")]
+    )
+    let store = ResetStore(defaults: defaults, notifications: scheduler) {
+        try fetcher.next()
+    }
+
+    await store.pollCodex()
+    await waitUntil {
+        store.notificationStatus?.contains("Could not request notification permission") == true
+    }
+
+    expect(store.notificationStatusIsError, "authorization request error must be visible")
+    expect(
+        store.notificationStatus?.contains("simulated authorization failure") == true,
+        "authorization request error includes the system error"
+    )
+    expectEqual(scheduler.scheduleCallCount, 0, "authorization failure cannot schedule")
+}
+
+@MainActor
+func testAlertMarkerSurvivesRestart() async {
+    let (defaults, suite) = makeStoreDefaults("marker-restart")
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let deadline = Date().addingTimeInterval(86_400)
+    let firstFetcher = StubRateLimitFetcher([
+        .success(weeklySnapshot(usedPercent: 80, resetsAt: deadline)),
+        .success(weeklySnapshot(usedPercent: 6, resetsAt: deadline)),
+    ])
+    let firstScheduler = StubNotificationScheduler()
+    let firstStore = ResetStore(defaults: defaults, notifications: firstScheduler) {
+        try firstFetcher.next()
+    }
+    await firstStore.pollCodex()
+    await firstStore.pollCodex()
+    expectEqual(firstStore.baseline?.alertedResetsAt, deadline, "setup commits the marker")
+
+    let restartedFetcher = StubRateLimitFetcher([
+        .success(weeklySnapshot(usedPercent: 6, resetsAt: deadline)),
+        .success(weeklySnapshot(usedPercent: 6, resetsAt: deadline)),
+    ])
+    let restartedScheduler = StubNotificationScheduler()
+    let restarted = ResetStore(defaults: defaults, notifications: restartedScheduler) {
+        try restartedFetcher.next()
+    }
+    await restarted.pollCodex()
+    await restarted.pollCodex()
+
+    expectEqual(
+        restarted.baseline?.alertedResetsAt.map { Int($0.timeIntervalSince1970.rounded()) },
+        Int(deadline.timeIntervalSince1970.rounded()),
+        "marker survives restart"
+    )
+    expect(restarted.lastAlertAt == nil, "restart does not resend an already handled alert")
+    expectEqual(restartedScheduler.scheduleCallCount, 0, "restart must not duplicate the alert")
+}
+
 func snapshot() -> CodexRateLimitSnapshot {
     CodexRateLimitSnapshot(
         ordinaryUsageAllowed: true,
@@ -804,6 +1092,11 @@ struct TrayMenuRuntimeTests {
         await testForecastRecoveryAfterTemporaryFailure()
         testQuitActionWiring()
         await testOpenMenuUpdatesInPlaceAndCloseRebuilds()
+        await testNotificationFailureRetriesAndCommitsOnlyAfterSuccess()
+        await testDeniedNotificationDoesNotCommitMarker()
+        await testStartupHistoricalStateDoesNotAlert()
+        await testAuthorizationRequestErrorIsVisible()
+        await testAlertMarkerSurvivesRestart()
 
         expect(!application.isRunning, "tests must leave the application unlaunched")
         expect(application.windows.isEmpty, "tests must not create windows")

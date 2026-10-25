@@ -3,6 +3,22 @@
 All notable changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Detect early 7-day quota restoration from a materially lower post-reset usage
+  reading, not only from usage at or below 1%. A new reset deadline can also
+  provide the restoration signal when usage has already climbed again.
+- Treat usage drops as material at 3 points and half of prior usage, with a
+  separate small-usage path when the quota clears to 1% or less. The old
+  five-point/near-zero rule could miss real resets.
+- Report `ordinaryUsageAllowed` in the alert but do not require it as proof that
+  the quota was restored.
+- Never alert on the first successful reading after launch, even with a
+  persisted baseline, so startup historical state is not reported as new.
+- Commit the per-window alert marker only after the notification scheduler
+  accepts the request. Authorization and scheduling failures are shown in a
+  dedicated menu row, and the prior baseline is retained for retry.
+
 ## [0.1.0] - 2026-10-24
 
 - Initial public release.
