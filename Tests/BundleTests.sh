@@ -8,7 +8,7 @@ BINARY="$APP/Contents/MacOS/CodexResetTray"
 BUNDLED_ICON="$APP/Contents/Resources/AppIcon.icns"
 SOURCE_ICON="$ROOT/Resources/AppIcon.icns"
 ICON_CHECK="$ROOT/.build/icon-pixel-check"
-EXPECTED_VERSION=${MARKETING_VERSION:-0.1.0}
+EXPECTED_VERSION=${MARKETING_VERSION:-0.2.0}
 EXPECTED_BUILD=${BUILD_NUMBER:-1}
 
 fail() {
