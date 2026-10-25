@@ -456,6 +456,7 @@ func testInfoViewRendersOffscreen() {
         "Reset forecast",
         rowTitle(populated, .codexStatus),
         rowTitle(populated, .codexWindows),
+        rowTitle(populated, .notificationStatus),
         rowTitle(populated, .forecastSummary),
         rowTitle(populated, .forecastDetail),
         "Menu bar 7d label: shown",
@@ -498,10 +499,16 @@ func testInfoViewRendersOffscreen() {
     let errorState = TrayMenuState(
         snapshot: snapshot(),
         codexError: "Codex app-server did not respond within 10 seconds.",
+        notificationStatus: "Notifications are denied in System Settings.",
+        notificationStatusIsError: true,
         forecastError: "codexreset.org returned HTTP 503."
     )
     view.update(with: TrayInfoModel.make(state: errorState))
-    for message in [codexMessage, "Forecast error: codexreset.org returned HTTP 503."] {
+    for message in [
+        codexMessage,
+        "Forecast error: codexreset.org returned HTTP 503.",
+        "Notifications are denied in System Settings.",
+    ] {
         guard let field = view.field(showing: message) else {
             expect(false, "info view must show error '\(message)'")
             continue

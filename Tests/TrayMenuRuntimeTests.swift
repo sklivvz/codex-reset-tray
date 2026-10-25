@@ -946,9 +946,9 @@ func testNotificationFailureRetriesAndCommitsOnlyAfterSuccess() async {
     let scheduler = StubNotificationScheduler(
         scheduleResults: [.failed("simulated scheduling failure"), .delivered]
     )
-    let store = ResetStore(defaults: defaults, notifications: scheduler) {
+    let store = ResetStore(defaults: defaults, notifications: scheduler, fetchRateLimits: {
         try fetcher.next()
-    }
+    })
 
     await store.pollCodex()
     expectEqual(store.baseline?.usedPercent, 80, "first poll establishes the session baseline")
@@ -1002,9 +1002,9 @@ func testDeniedNotificationDoesNotCommitMarker() async {
         requestResults: [.denied],
         scheduleResults: [.notAuthorized(.denied)]
     )
-    let store = ResetStore(defaults: defaults, notifications: scheduler) {
+    let store = ResetStore(defaults: defaults, notifications: scheduler, fetchRateLimits: {
         try fetcher.next()
-    }
+    })
 
     await store.pollCodex()
     await store.pollCodex()
@@ -1037,9 +1037,9 @@ func testStartupHistoricalStateDoesNotAlert() async {
         .success(weeklySnapshot(usedPercent: 6, resetsAt: deadline)),
     ])
     let scheduler = StubNotificationScheduler()
-    let store = ResetStore(defaults: defaults, notifications: scheduler) {
+    let store = ResetStore(defaults: defaults, notifications: scheduler, fetchRateLimits: {
         try fetcher.next()
-    }
+    })
 
     await store.pollCodex()
 
@@ -1060,9 +1060,9 @@ func testAuthorizationRequestErrorIsVisible() async {
     let scheduler = StubNotificationScheduler(
         requestResults: [.error("simulated authorization failure")]
     )
-    let store = ResetStore(defaults: defaults, notifications: scheduler) {
+    let store = ResetStore(defaults: defaults, notifications: scheduler, fetchRateLimits: {
         try fetcher.next()
-    }
+    })
 
     await store.pollCodex()
     await waitUntil {
@@ -1087,9 +1087,9 @@ func testAlertMarkerSurvivesRestart() async {
         .success(weeklySnapshot(usedPercent: 6, resetsAt: deadline)),
     ])
     let firstScheduler = StubNotificationScheduler()
-    let firstStore = ResetStore(defaults: defaults, notifications: firstScheduler) {
+    let firstStore = ResetStore(defaults: defaults, notifications: firstScheduler, fetchRateLimits: {
         try firstFetcher.next()
-    }
+    })
     await firstStore.pollCodex()
     await firstStore.pollCodex()
     expectEqual(firstStore.baseline?.alertedResetsAt, deadline, "setup commits the marker")
@@ -1099,9 +1099,9 @@ func testAlertMarkerSurvivesRestart() async {
         .success(weeklySnapshot(usedPercent: 6, resetsAt: deadline)),
     ])
     let restartedScheduler = StubNotificationScheduler()
-    let restarted = ResetStore(defaults: defaults, notifications: restartedScheduler) {
+    let restarted = ResetStore(defaults: defaults, notifications: restartedScheduler, fetchRateLimits: {
         try restartedFetcher.next()
-    }
+    })
     await restarted.pollCodex()
     await restarted.pollCodex()
 

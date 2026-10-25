@@ -355,7 +355,8 @@ struct TrayMenuTests {
         )
         expectEqual(
             populated.sections[0].rows.map(\.text),
-            [.codexStatus, .codexWindows, .codexMeta].compactMap { menu.item(withRole: $0)?.title },
+            [.codexStatus, .codexWindows, .codexMeta, .notificationStatus]
+                .compactMap { menu.item(withRole: $0)?.title },
             "info Codex rows match the menu"
         )
         expectEqual(

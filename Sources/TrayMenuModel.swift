@@ -355,7 +355,7 @@ struct TrayMenuModel: Equatable {
             role: .notificationStatus,
             title: state.notificationStatus ?? "Notifications: permission has not been requested yet.",
             tone: state.notificationStatusIsError ? .error : .normal,
-            isEnabled: false,
+            isEnabled: true,
             toolTip: "Notification permission and delivery state for early-restoration alerts."
         )
     }
@@ -497,9 +497,6 @@ struct TrayInfoModel: Equatable {
         if let lastCheck = state.lastForecastCheck {
             footer.append("Last forecast check: \(TrayMenuModel.dateText(lastCheck))")
         }
-        if let notificationStatus = state.notificationStatus {
-            footer.append("Notifications: \(notificationStatus)")
-        }
         footer.append("Menu bar 7d label: \(state.showsUsageInMenuBar ? "shown" : "hidden")")
 
         return TrayInfoModel(
@@ -511,7 +508,7 @@ struct TrayInfoModel: Equatable {
             sections: [
                 TrayInfoSection(
                     title: "Codex usage",
-                    rows: rows([.codexStatus, .codexWindows, .codexMeta])
+                    rows: rows([.codexStatus, .codexWindows, .codexMeta, .notificationStatus])
                 ),
                 TrayInfoSection(
                     title: "Reset forecast",
