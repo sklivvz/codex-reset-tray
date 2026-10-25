@@ -26,11 +26,13 @@ Requirements: macOS 13 or later, Apple Command Line Tools with Swift, and the
 ```
 
 `test.sh` is the required command-line gate. It covers parser and restoration
-logic with fixtures, the tray menu model, an offscreen AppKit `NSMenu` harness,
-the icon, the app bundle, and its signature. The AppKit harness must remain
-offscreen: do not add desktop launches, clicks, screenshots, Accessibility UI
-inspection, AppleScript, or code that controls another application to the test
-suite.
+logic with fixtures, the actions-menu and information-popover models, an
+offscreen AppKit `NSMenu` harness, the icon, the app bundle, and its signature.
+The AppKit harness must remain offscreen: do not add desktop launches, clicks,
+screenshots, Accessibility UI inspection, AppleScript, or code that controls
+another application to the default suite. The separate opt-in
+`--live-status-item` harness runs on GitHub-hosted macOS CI and may be run
+manually in a GUI session.
 
 Run the tests before opening a pull request and include the commands and result
 in the description. If you change packaging, also run `package-release.sh` on
@@ -43,6 +45,10 @@ macOS and confirm that its read-only DMG validation passes.
   display `accountId`, credentials, or local account data.
 - Keep user-visible strings, tooltips, and VoiceOver labels accurate and
   reasonably short.
+- Keep the two-surface contract: left click opens the information popover with
+  every status/usage/reset/notification/forecast value, and right click opens an
+  actions-only native menu. Do not add informational rows to the menu.
+- Native gray in the menu must only mean a genuinely disabled action.
 - Keep menu item ordering stable while the menu is open.
 - Add or update a focused test for behavior changes.
 - Update `README.md` and `CHANGELOG.md` for user-visible changes.

@@ -32,9 +32,11 @@ swiftc -swift-version 5 -parse-as-library \
 
 "$PARSER_OUTPUT" "$ROOT/Tests/Fixtures/codexreset-page.html"
 
+# Pure actions-menu and information-popover model tests.
 swiftc -swift-version 5 -parse-as-library \
     -module-cache-path "$CACHE_DIR" \
     "$ROOT/Sources/AppBuildInfo.swift" \
+    "$ROOT/Sources/TrayInfoModel.swift" \
     "$ROOT/Sources/TrayMenuModel.swift" \
     "$ROOT/Sources/CodexRateLimits.swift" \
     "$ROOT/Sources/RestorationDetector.swift" \
@@ -56,7 +58,8 @@ swiftc -swift-version 5 -parse-as-library \
     "$ROOT/Sources/ResetPage.swift" \
     "$ROOT/Sources/ResetStore.swift" \
     "$ROOT/Sources/RestorationDetector.swift" \
-    "$ROOT/Sources/TrayInfoWindow.swift" \
+    "$ROOT/Sources/TrayInfoModel.swift" \
+    "$ROOT/Sources/TrayInfoPopover.swift" \
     "$ROOT/Sources/TrayMenuController.swift" \
     "$ROOT/Sources/TrayMenuModel.swift" \
     "$ROOT/Sources/TrayStatusItem.swift" \
