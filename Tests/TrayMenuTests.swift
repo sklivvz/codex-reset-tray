@@ -143,12 +143,13 @@ struct TrayMenuTests {
     private static func testCachedForecastAndFreshErrorBothRender() {
         let message = "codexreset.org returned HTTP 503."
         let model = TrayMenuModel.make(
-            state: TrayMenuState(forecast: forecast(), forecastError: message)
+            state: TrayMenuState(forecast: forecast(), forecastError: message, lastForecastSuccess: menuTestNow)
         )
 
         let summary = model.item(withRole: .forecastSummary)
-        expectEqual(summary?.tone, .normal, "cached probabilities should remain visible")
+        expectEqual(summary?.tone, .error, "stale probabilities should be marked")
         expect(summary?.title.contains("28% within 24h") == true, "cached 24h probability")
+        expect(summary?.title.contains("stale, updated") == true, "cached forecast needs a freshness label")
 
         let detail = model.item(withRole: .forecastDetail)
         expectEqual(detail?.tone, .error, "fresh forecast error should render on the detail line")

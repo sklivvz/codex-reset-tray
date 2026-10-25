@@ -104,6 +104,8 @@ Quit are always in the menu; Quit is always enabled and last.
 - The forecast shows 24-hour and 48-hour probabilities in the menu, with the
   latest reported restoration and forecast summary available there and in its
   tooltip.
+- A failed refresh keeps the last forecast visible as stale and shows when it
+  was last updated. Opening the menu retries after a failure.
 - The site is never consulted for notification decisions.
 
 ## Requirements

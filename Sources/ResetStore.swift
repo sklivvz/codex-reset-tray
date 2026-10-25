@@ -14,6 +14,7 @@ final class ResetStore: ObservableObject {
     @Published private(set) var forecast: ResetSnapshot?
     @Published private(set) var forecastError: String?
     @Published private(set) var lastForecastCheck: Date?
+    @Published private(set) var lastForecastSuccess: Date?
     @Published private(set) var isFetchingForecast = false
 
     @Published private(set) var notificationStatus: String?
@@ -27,12 +28,14 @@ final class ResetStore: ObservableObject {
     private var pollingTask: Task<Void, Never>?
     private var hasStartedFirstFetch = false
     private var lastMenuForecastFetch: Date?
+    private let fetchForecast: () async throws -> ResetSnapshot
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, fetchForecast: @escaping () async throws -> ResetSnapshot = ResetPage.fetch) {
         let store = BaselineStore(defaults: defaults)
         let visibility = MenuBarVisibilityStore(defaults: defaults)
         baselineStore = store
         visibilityStore = visibility
+        self.fetchForecast = fetchForecast
         baseline = store.load()
         showsUsageInMenuBar = visibility.load()
     }
@@ -67,6 +70,7 @@ final class ResetStore: ObservableObject {
             isFetchingForecast: isFetchingForecast,
             lastCodexCheck: lastCodexCheck,
             lastForecastCheck: lastForecastCheck,
+            lastForecastSuccess: lastForecastSuccess,
             showsUsageInMenuBar: showsUsageInMenuBar
         )
     }
@@ -97,7 +101,7 @@ final class ResetStore: ObservableObject {
     /// fetched only here and from the explicit Refresh button.
     func menuDidOpen() {
         let now = Date()
-        if let last = lastMenuForecastFetch,
+        if forecastError == nil, let last = lastMenuForecastFetch,
            now.timeIntervalSince(last) < Self.menuForecastDebounce {
             return
         }
@@ -160,9 +164,11 @@ final class ResetStore: ObservableObject {
         defer { isFetchingForecast = false }
 
         do {
-            forecast = try await ResetPage.fetch()
+            forecast = try await fetchForecast()
             forecastError = nil
-            lastForecastCheck = Date()
+            let now = Date()
+            lastForecastCheck = now
+            lastForecastSuccess = now
         } catch {
             forecastError = error.localizedDescription
             lastForecastCheck = Date()
