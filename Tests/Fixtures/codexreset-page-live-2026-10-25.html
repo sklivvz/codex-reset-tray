@@ -1,0 +1,78 @@
+<!doctype html>
+<!--
+  Sanitized excerpt captured from https://codexreset.org/ on 2026-10-25.
+  The live response was 996353 bytes. Classes, styles, SVG decoration, analytics,
+  unrelated public posts, and account/network identifiers were removed. The reset
+  card, forecast panel, forecast summary, and timeline confirmation markers below
+  preserve the live values and data-testid attributes. The JSON-LD answer is kept
+  because its "latest confirmed reset" phrase previously confused the fallback.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Codex Reset Monitor – Live Status &amp; Reset Timeline</title>
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Question",
+      "name": "How is the Codex reset Forecast Score calculated?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "With no predictive X signal after the latest confirmed reset, the site uses the empirical 24h and 48h reset-cadence baseline."
+      }
+    }
+  </script>
+</head>
+<body>
+  <main>
+    <section aria-labelledby="reset-elapsed-title" data-testid="current-reset-status">
+      <div>
+        <h2 id="reset-elapsed-title">Time since the last blessing</h2>
+        <p data-testid="reset-elapsed-time">2 hours ago</p>
+        <time dateTime="2026-10-25T06:06:16.000Z" data-testid="reset-exact-time">Oct 25, 2026 · 06:06 UTC</time>
+      </div>
+    </section>
+
+    <section aria-label="Next reset probability" data-calibration-sample-size="1" data-calibration-state="experimental" data-testid="forecast-panel">
+      <div>
+        <div>
+          <p>24 hours</p>
+          <div role="img" aria-label="Historical probability of another global reset within 24 hours: 29%" data-calibrated="false" data-testid="probability-ring-24h" data-animation="count-up-ring" data-animated-value="29" data-target-value="29" data-unit="percent">
+            <span aria-hidden="true">29%</span>
+            <span class="sr-only">Final forecast: 29%</span>
+          </div>
+        </div>
+        <div>
+          <p>48 hours</p>
+          <div role="img" aria-label="Historical probability of another global reset within 48 hours: 50%" data-calibrated="false" data-testid="probability-ring-48h" data-animation="count-up-ring" data-animated-value="50" data-target-value="50" data-unit="percent">
+            <span aria-hidden="true">50%</span>
+            <span class="sr-only">Final forecast: 50%</span>
+          </div>
+        </div>
+      </div>
+      <section data-testid="forecast-reasons">
+        <h2>Why this estimate</h2>
+        <p data-testid="forecast-summary">No predictive X signal with an active time window remains. The estimate therefore stays at the observed reset-cadence baseline: 29% within 24 hours and 50% within 48 hours.</p>
+      </section>
+    </section>
+
+    <section id="timeline" aria-labelledby="timeline-title">
+      <h2 id="timeline-title">Codex reset timeline</h2>
+      <p>Confirmed resets and public X signals that changed the 24h or 48h estimate. Latest activity is on the right.</p>
+      <div>
+        <button type="button" data-testid="latest-confirmed-reset-jump"><span aria-hidden="true"></span>Latest confirmed ·<!-- --> <!-- -->Oct 25</button>
+        <span><span aria-hidden="true"></span>Confirmed reset</span>
+        <span><span aria-hidden="true"></span>Forecast-changing signal</span>
+      </div>
+      <div data-testid="reset-timeline-scroll">
+        <div data-datetime="2026-10-25T06:06:16.000Z" data-default-focus="true" data-kind="confirmed" data-testid="reset-timeline-item">
+          <article>
+            <div><span>Confirmed reset</span></div>
+            <h3>Global Codex quota reset</h3>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

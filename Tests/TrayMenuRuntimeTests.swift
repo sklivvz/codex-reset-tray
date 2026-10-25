@@ -600,7 +600,7 @@ func testForecastStatusAndMetaRows() {
     expect(summary.title.contains("28% within 24h"), "24-hour forecast row")
     expect(summary.title.contains("49% within 48h"), "48-hour forecast row")
     expect(summary.toolTip == forecast().forecastSummary, "forecast summary tooltip")
-    expect(detail.title.contains("Latest restoration"), "forecast detail row")
+    expect(detail.title.contains("Latest confirmed reset"), "forecast detail row")
     expect(detail.title.contains("Quota restored"), "forecast restoration status")
 
     expectEqual(harness.item(for: .action(.refresh))?.title, "Refresh", "Refresh row")
