@@ -47,6 +47,7 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
     private var cancellable: AnyCancellable?
     private var isMenuOpen = false
     let statusLabelView = TrayStatusLabelView()
+    private(set) var secondaryClickRecognizer: NSClickGestureRecognizer?
     private var statusLabelLeading: NSLayoutConstraint?
     /// Which asset the current status icon was derived from.
     private(set) var statusIconSource: TrayStatusIconSource = .appIcon
@@ -107,11 +108,19 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
             button.font = TrayStatusLayout.labelFont
             button.setAccessibilityLabel("Codex Reset Tray")
             // The status item has no attached menu: a left click opens the
-            // information window and a right click opens the actions menu, so
-            // the button must report both mouse-up events itself.
+            // information window and a right click opens the actions menu.
+            // NSCell action masks track left clicks; a gesture recognizer
+            // handles the secondary mouse button.
             button.target = self
             button.action = #selector(statusItemClicked)
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            button.sendAction(on: [.leftMouseUp])
+            let secondaryClick = NSClickGestureRecognizer(
+                target: self,
+                action: #selector(statusItemSecondaryClicked)
+            )
+            secondaryClick.buttonMask = 0x2
+            button.addGestureRecognizer(secondaryClick)
+            secondaryClickRecognizer = secondaryClick
             statusLabelView.translatesAutoresizingMaskIntoConstraints = false
             button.addSubview(statusLabelView)
             let leading = statusLabelView.leadingAnchor.constraint(equalTo: button.centerXAnchor)
@@ -178,6 +187,10 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
 
     @objc private func statusItemClicked(_ sender: Any?) {
         handleStatusClick(TrayStatusClick.classify(currentEvent()))
+    }
+
+    @objc func statusItemSecondaryClicked(_ sender: Any?) {
+        handleStatusClick(.secondary)
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {

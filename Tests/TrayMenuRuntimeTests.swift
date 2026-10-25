@@ -171,7 +171,16 @@ final class Harness {
     func click(_ type: NSEvent.EventType, modifiers: NSEvent.ModifierFlags = []) {
         recorder.nextEvent = mouseEvent(type, modifiers: modifiers)
         let button = statusItem.button
-        _ = button.sendAction(button.action, to: button.target)
+        if type == .rightMouseUp {
+            guard let recognizer = controller.secondaryClickRecognizer,
+                  let action = recognizer.action else {
+                expect(false, "right click must have a gesture action")
+                return
+            }
+            _ = button.sendAction(action, to: recognizer.target)
+        } else {
+            _ = button.sendAction(button.action, to: button.target)
+        }
     }
 
     var model: TrayMenuModel {

@@ -331,6 +331,19 @@ func testLeftClickOpensInfoWindowAndRightClickOpensMenu() async {
     let harness = Harness(state: populatedState())
     let button = harness.statusItem.button
     expect(button.target === harness.controller, "button targets controller")
+    let secondaryClick = harness.controller.secondaryClickRecognizer
+    expect(secondaryClick != nil, "secondary-click recognizer must be installed")
+    expect(
+        button.gestureRecognizers.contains { $0 === secondaryClick },
+        "status button must own the secondary-click recognizer"
+    )
+    expectEqual(secondaryClick?.buttonMask, 0x2, "recognizer listens to the right mouse button")
+    expect(secondaryClick?.target === harness.controller, "recognizer targets controller")
+    expectEqual(
+        secondaryClick?.action,
+        #selector(TrayMenuController.statusItemSecondaryClicked(_:)),
+        "recognizer calls the secondary-click action"
+    )
 
     // Left click: information window, no menu.
     harness.click(.leftMouseUp)
