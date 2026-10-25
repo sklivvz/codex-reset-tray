@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MARKETING_VERSION: "0.1.0"
+  MARKETING_VERSION: "0.2.0"
   BUILD_NUMBER: "1"
   BUILD_ARCHS: "arm64 x86_64"
 
@@ -44,7 +44,7 @@ jobs:
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CodexResetTray-v0.1.0-macos-universal
+          name: CodexResetTray-v0.2.0-macos-universal
           path: |
             dist/*.dmg
             dist/*.sha256
