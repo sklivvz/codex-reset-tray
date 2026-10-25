@@ -19,6 +19,7 @@ final class ResetStore: ObservableObject {
 
     @Published private(set) var notificationStatus: String?
     @Published private(set) var notificationStatusIsError = false
+    @Published private(set) var notificationAuthorization: NotificationAuthorization?
     @Published private(set) var showsUsageInMenuBar: Bool
 
     private static let pollInterval: UInt64 = 5 * 60 * 1_000_000_000
@@ -29,7 +30,6 @@ final class ResetStore: ObservableObject {
     private let notifications: any NotificationScheduling
     private let fetchRateLimits: @Sendable () async throws -> CodexRateLimitSnapshot
     private var pollingTask: Task<Void, Never>?
-    private var hasPreparedNotificationAuthorization = false
     private var hasEstablishedSessionBaseline = false
     private var hasAttemptedNotificationScheduling = false
     private var lastMenuForecastFetch: Date?
@@ -86,7 +86,8 @@ final class ResetStore: ObservableObject {
             lastCodexCheck: lastCodexCheck,
             lastForecastCheck: lastForecastCheck,
             lastForecastSuccess: lastForecastSuccess,
-            showsUsageInMenuBar: showsUsageInMenuBar
+            showsUsageInMenuBar: showsUsageInMenuBar,
+            notificationPermission: TrayNotificationPermission(notificationAuthorization)
         )
     }
 
@@ -135,10 +136,6 @@ final class ResetStore: ObservableObject {
         } catch {
             result = .failure(error)
         }
-
-        // The permission prompt starts only after the first usage fetch has begun
-        // (and completed). It does not block evaluation of the reading.
-        prepareNotificationAuthorizationIfNeeded()
 
         let now = Date()
         let outcome = CodexPoller.apply(result, baseline: baseline, now: now)
@@ -197,21 +194,26 @@ final class ResetStore: ObservableObject {
         }
     }
 
-    private func prepareNotificationAuthorizationIfNeeded() {
-        guard !hasPreparedNotificationAuthorization else { return }
-        hasPreparedNotificationAuthorization = true
-        // This starts only after the first usage fetch has begun. It deliberately
-        // does not block polling if the system prompt is left unanswered. The
-        // status is checked first so an already granted app is never prompted.
-        Task { [weak self] in
-            guard let self else { return }
-            let status = await self.notifications.prepareAuthorization()
-            self.applyAuthorizationStatus(status)
-        }
+    /// Re-reads macOS authorization without prompting. The menu controller
+    /// calls this when the menu opens or the app regains focus so the native
+    /// check mark follows changes made in System Settings.
+    func refreshNotificationAuthorization() async -> NotificationAuthorization {
+        let status = await notifications.authorizationStatus()
+        applyNotificationAuthorization(status)
+        return status
     }
 
-    private func applyAuthorizationStatus(_ status: NotificationAuthorization) {
-        // A scheduling result is more specific than a background authorization
+    /// Requests permission only when the menu action explicitly asks. The
+    /// scheduler itself guards against re-prompting a decided app.
+    func requestNotificationAuthorization() async -> NotificationAuthorization {
+        let status = await notifications.requestAuthorization()
+        applyNotificationAuthorization(status)
+        return status
+    }
+
+    private func applyNotificationAuthorization(_ status: NotificationAuthorization) {
+        notificationAuthorization = status
+        // A scheduling result is more specific than a read-only authorization
         // result; never let a late permission response hide a failure or success.
         guard !hasAttemptedNotificationScheduling else { return }
         switch status {
@@ -276,5 +278,20 @@ struct MenuBarVisibilityStore {
 
     func save(_ visible: Bool) {
         defaults.set(visible, forKey: Self.key)
+    }
+}
+
+private extension TrayNotificationPermission {
+    init(_ authorization: NotificationAuthorization?) {
+        switch authorization {
+        case nil, .some(.error(_)):
+            self = .unknown
+        case .some(.notDetermined):
+            self = .notDetermined
+        case .some(.denied):
+            self = .denied
+        case .some(.authorized), .some(.provisional), .some(.ephemeral):
+            self = .allowed
+        }
     }
 }

@@ -162,18 +162,42 @@ private func performLiveStatusItemChecks(
         "live info popover must contain the current model"
     )
     let renderedInfo = info.contentView?.renderedTexts ?? []
-    for row in liveInfo.allRows {
+    let expectedInfoTexts = [
+        "Codex Reset Tray",
+        "63%",
+        "7-day Codex usage",
+        "Reset forecast",
+        "28%",
+        "49%",
+        "within 24h",
+        "within 48h",
+    ]
+    expectEqual(
+        renderedInfo.sorted(),
+        expectedInfoTexts.sorted(),
+        "live info popover must render exactly the compact usage and forecast content"
+    )
+    expect(
+        !renderedInfo.contains("Codex usage"),
+        "live info popover must not render the removed Codex usage section title"
+    )
+    for removed in [
+        "Latest confirmed reset",
+        "Last Codex check:",
+        "Menu bar 7d label:",
+        "Version ",
+        "Notifications are denied",
+    ] {
         expect(
-            renderedInfo.contains(row.text),
-            "live info popover must render all informational rows (missing '\(row.text)')"
+            !renderedInfo.contains { $0.contains(removed) },
+            "live info popover must not render removed content '\(removed)'"
         )
     }
-    for footer in liveInfo.footer {
-        expect(
-            renderedInfo.contains(footer),
-            "live info popover must render its footer (missing '\(footer)')"
-        )
-    }
+    expectEqual(
+        info.contentView?.forecastValues,
+        ["28%", "49%"],
+        "live info popover must render two forecast percentages"
+    )
     await waitForLiveCondition(timeout: 3, "shown info popover window") {
         info.contentView?.window != nil
     }
@@ -272,8 +296,8 @@ private func performLiveStatusItemChecks(
     )
     expectEqual(
         menu.items.filter { !$0.isSeparatorItem }.count,
-        6,
-        "opened actions menu must contain exactly the six configuration/actions rows"
+        8,
+        "opened actions menu must contain exactly the eight configuration/actions rows"
     )
     for item in menu.items where !item.isSeparatorItem {
         expect(item.isEnabled, "opened actions menu must not render gray informational text")
@@ -283,10 +307,10 @@ private func performLiveStatusItemChecks(
         for fragment in [
             "7-day Codex usage",
             "Forecast",
-            "Notifications",
             "Codex error",
             "Baseline",
             "Latest confirmed reset",
+            "denied in System Settings",
         ] {
             expect(
                 !item.title.contains(fragment),
@@ -294,6 +318,10 @@ private func performLiveStatusItemChecks(
             )
         }
     }
+    expect(menu.items.contains { $0.title == "Enable Notifications" },
+           "opened actions menu must contain Enable Notifications")
+    expect(menu.items.contains { $0.title == "About Codex Reset Tray" },
+           "opened actions menu must contain About")
     expect(menu.items.contains { $0.title == "Quit Codex Reset Tray" },
            "opened actions menu must contain Quit")
 
@@ -345,8 +373,8 @@ private func performLiveStatusItemChecks(
     expect(!info.isShown, "control-left click must leave the info popover hidden")
     expectEqual(
         menu.items.filter { !$0.isSeparatorItem }.count,
-        6,
-        "control-left menu must still contain exactly the six configuration/actions rows"
+        8,
+        "control-left menu must still contain exactly the eight configuration/actions rows"
     )
 
     // Left click reopens the popover, then a second left click toggles it shut.

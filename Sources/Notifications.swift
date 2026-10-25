@@ -107,18 +107,18 @@ protocol NotificationScheduling: AnyObject {
 }
 
 extension NotificationScheduling {
-    /// Check first so an already granted or denied app never asks the system
-    /// again. Only an undecided app should produce the permission prompt.
-    func prepareAuthorization() async -> NotificationAuthorization {
-        let status = await authorizationStatus()
-        guard status == .notDetermined else { return status }
-        return await requestAuthorization()
+    /// Read-only authorization check used before scheduling. It never prompts:
+    /// permission requests are reserved for the explicit Enable Notifications
+    /// menu action.
+    func currentAuthorization() async -> NotificationAuthorization {
+        await authorizationStatus()
     }
 }
 
-/// Formats a system error for the menu without exposing a raw error description,
-/// which can contain local bundle paths. The NSError domain and numeric code are
-/// preserved because they are the actionable diagnostic values.
+/// Formats a system error for the diagnostic Copy Status Summary without
+/// exposing a raw error description, which can contain local bundle paths. The
+/// NSError domain and numeric code are preserved because they are the actionable
+/// diagnostic values.
 enum NotificationErrorDiagnostics {
     static func describe(_ error: Error) -> String {
         let nsError = error as NSError
@@ -175,7 +175,10 @@ final class SystemNotificationScheduler: NotificationScheduling {
     }
 
     func schedule(_ alert: RestorationAlert) async -> NotificationDeliveryResult {
-        let authorization = await prepareAuthorization()
+        // Scheduling only reads the current authorization. Asking for
+        // permission here would unexpectedly prompt on a reset or app launch;
+        // the Enable Notifications menu action is the only prompt path.
+        let authorization = await currentAuthorization()
         guard authorization.allowsDelivery else {
             return .notAuthorized(authorization)
         }

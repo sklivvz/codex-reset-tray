@@ -13,6 +13,10 @@ protocol TrayMenuSource: AnyObject {
     func setShowsUsageInMenuBar(_ visible: Bool)
     func menuDidOpen()
     func refreshAll() async
+    /// Reads the current macOS notification authorization without prompting.
+    func refreshNotificationAuthorization() async -> NotificationAuthorization
+    /// Requests permission only from the explicit Enable Notifications action.
+    func requestNotificationAuthorization() async -> NotificationAuthorization
 }
 
 /// The piece of AppKit the controller needs from a status item. Production uses
@@ -44,8 +48,10 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
     private let appIconProvider: @MainActor () -> NSImage?
     private let currentEvent: @MainActor () -> NSEvent?
     private let infoPresenter: any TrayInfoPresenting
+    private let aboutPresenter: any AboutPresenting
     private var cancellable: AnyCancellable?
     private var statusEventMonitor: Any?
+    private var appDidBecomeActiveObserver: NSObjectProtocol?
     private var isMenuOpen = false
     /// A native actions menu requested by a right/control click. `NSPopover.close()`
     /// only starts the close, so presentation stays pending until the info
@@ -87,6 +93,7 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         openURL: @escaping @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) },
         appIconProvider: @escaping @MainActor () -> NSImage? = { TrayStatusIcon.bundledAppIcon() },
         infoPresenter: (any TrayInfoPresenting)? = nil,
+        aboutPresenter: (any AboutPresenting)? = nil,
         currentEvent: @escaping @MainActor () -> NSEvent? = { NSApp.currentEvent },
         writeToPasteboard: @escaping @MainActor (String) -> Void = { text in
             let pasteboard = NSPasteboard.general
@@ -102,6 +109,7 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         self.appIconProvider = appIconProvider
         self.currentEvent = currentEvent
         self.infoPresenter = infoPresenter ?? TrayInfoPopoverPresenter(appIconProvider: appIconProvider)
+        self.aboutPresenter = aboutPresenter ?? AboutPanelPresenter(appIconProvider: appIconProvider)
         self.writeToPasteboard = writeToPasteboard
         super.init()
 
@@ -109,8 +117,8 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         menu.autoenablesItems = false
         menu.setAccessibilityLabel("Codex Reset Tray actions")
         menu.setAccessibilityHelp(
-            "Configuration and actions. Usage and forecast details are in the "
-                + "left-click information popover."
+            "Configuration and actions, including notification permission and About. "
+                + "Usage and forecast details are in the left-click information popover."
         )
 
         // `close()` can finish after the click event returns. Observe the real
@@ -123,6 +131,19 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.presentPendingActionsMenuIfReady()
+            }
+        }
+
+        // System Settings can change notification authorization while this
+        // accessory app is inactive. Re-read it on focus so the check mark is
+        // correct the next time the menu is seen.
+        appDidBecomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshNotificationAuthorization()
             }
         }
 
@@ -184,6 +205,9 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         }
         if let popoverCloseObserver {
             NotificationCenter.default.removeObserver(popoverCloseObserver)
+        }
+        if let appDidBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(appDidBecomeActiveObserver)
         }
     }
 
@@ -283,6 +307,34 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         infoPresenter.update(TrayInfoModel.make(state: source.menuState))
     }
 
+    /// Re-reads authorization and updates the menu (in place when open). The
+    /// menu-open path and the app-focus observer both use this, so a check mark
+    /// never depends on a stale value cached at launch.
+    func refreshNotificationAuthorization() {
+        Task { [weak self] in
+            guard let self else { return }
+            _ = await self.source.refreshNotificationAuthorization()
+            self.apply(TrayMenuModel.make(state: self.source.menuState))
+        }
+    }
+
+    /// The menu action is the only place that can produce the macOS permission
+    /// prompt. Everything the system can no longer prompt for routes to the
+    /// Notifications pane instead.
+    private func handleEnableNotifications() {
+        Task { [weak self] in
+            guard let self else { return }
+            let status = await self.source.refreshNotificationAuthorization()
+            switch status {
+            case .notDetermined:
+                _ = await self.source.requestNotificationAuthorization()
+            case .authorized, .provisional, .ephemeral, .denied, .error:
+                self.openURL(TrayMenuModel.notificationSettingsURL)
+            }
+            self.apply(TrayMenuModel.make(state: self.source.menuState))
+        }
+    }
+
     @objc private func statusItemClicked(_ sender: Any?) {
         handleStatusClick(TrayStatusClick.classify(currentEvent()))
     }
@@ -335,6 +387,8 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         pendingActionsMenuRequest = nil
         // Preserve forecast-on-click behavior: the store debounces these fetches.
         source.menuDidOpen()
+        // Authorization can have changed in System Settings since launch.
+        refreshNotificationAuthorization()
     }
 
     func menuDidClose(_ menu: NSMenu) {
@@ -441,10 +495,14 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
             return #selector(copyStatus)
         case .action(.toggleMenuBarUsage):
             return #selector(toggleMenuBarUsage)
+        case .action(.enableNotifications):
+            return #selector(enableNotifications)
         case .action(.openWebsite):
             return #selector(openWebsite)
         case .action(.donate):
             return #selector(donate)
+        case .action(.about):
+            return #selector(showAbout)
         case .action(.quit):
             return #selector(quit)
         default:
@@ -466,6 +524,14 @@ final class TrayMenuController: NSObject, NSMenuDelegate {
         // waiting for the publisher's next main-run-loop turn.
         updateStatusButton()
         apply(TrayMenuModel.make(state: source.menuState))
+    }
+
+    @objc private func enableNotifications(_ sender: NSMenuItem) {
+        handleEnableNotifications()
+    }
+
+    @objc private func showAbout(_ sender: NSMenuItem) {
+        aboutPresenter.show()
     }
 
     @objc private func openWebsite(_ sender: NSMenuItem) {

@@ -1,21 +1,30 @@
 import AppKit
 
-/// The information popover's content. It is a plain `NSView`, so tests can
-/// build it, feed it models, and inspect or render it without ever creating a
-/// popover.
+/// The compact information popover's content. It is a plain `NSView`, so tests
+/// can build it, feed it models, and inspect or render it without ever creating
+/// a popover.
 @MainActor
 final class TrayInfoView: NSView {
-    static let contentWidth: CGFloat = 380
+    static let contentWidth: CGFloat = 340
     private static let inset: CGFloat = 20
+    private static let forecastSpacing: CGFloat = 12
+    static let forecastValueFontSize: CGFloat = 36
 
     private let iconView = NSImageView()
     private let titleField = TrayInfoView.makeLabel(size: 15, weight: .semibold)
-    private let versionField = TrayInfoView.makeLabel(size: 11, weight: .regular)
-    private let usageValueField = TrayInfoView.makeLabel(size: 34, weight: .semibold, monospacedDigits: true)
+    private let usageValueField = TrayInfoView.makeLabel(
+        size: 34,
+        weight: .semibold,
+        monospacedDigits: true
+    )
     private let usageCaptionField = TrayInfoView.makeLabel(size: 12, weight: .regular)
     private let meter = NSProgressIndicator()
-    private let sectionsStack = NSStackView()
-    private let footerStack = NSStackView()
+    private let forecastHeading = TrayInfoView.makeLabel(size: 12, weight: .semibold)
+    private let forecastFiguresStack = NSStackView()
+    private let forecastStatusField = TrayInfoView.makeStatusField()
+    private var forecastValueFields: [NSTextField] = []
+    private var forecastCaptionFields: [NSTextField] = []
+    private var forecastColumns: [NSStackView] = []
     private(set) var model: TrayInfoModel?
     private(set) var updateCount = 0
 
@@ -31,7 +40,7 @@ final class TrayInfoView: NSView {
             iconView.heightAnchor.constraint(equalToConstant: 44),
         ])
 
-        let titles = NSStackView(views: [titleField, versionField])
+        let titles = NSStackView(views: [titleField])
         titles.orientation = .vertical
         titles.alignment = .leading
         titles.spacing = 2
@@ -53,15 +62,21 @@ final class TrayInfoView: NSView {
         usage.spacing = 4
         usage.setCustomSpacing(8, after: usageCaptionField)
 
-        sectionsStack.orientation = .vertical
-        sectionsStack.alignment = .leading
-        sectionsStack.spacing = 14
+        forecastHeading.stringValue = "Reset forecast"
+        configureForecastFigures()
+        forecastStatusField.isHidden = true
 
-        footerStack.orientation = .vertical
-        footerStack.alignment = .leading
-        footerStack.spacing = 2
+        let forecast = NSStackView(views: [
+            forecastHeading,
+            forecastFiguresStack,
+            forecastStatusField,
+        ])
+        forecast.orientation = .vertical
+        forecast.alignment = .leading
+        forecast.spacing = 6
+        forecast.setCustomSpacing(10, after: forecastHeading)
 
-        let root = NSStackView(views: [header, usage, sectionsStack, footerStack])
+        let root = NSStackView(views: [header, usage, forecast])
         root.orientation = .vertical
         root.alignment = .leading
         root.spacing = 16
@@ -71,15 +86,18 @@ final class TrayInfoView: NSView {
         root.translatesAutoresizingMaskIntoConstraints = false
         addSubview(root)
 
+        let contentWidth = Self.contentWidth - 2 * Self.inset
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: Self.contentWidth),
             root.leadingAnchor.constraint(equalTo: leadingAnchor),
             root.trailingAnchor.constraint(equalTo: trailingAnchor),
             root.topAnchor.constraint(equalTo: topAnchor),
             root.bottomAnchor.constraint(equalTo: bottomAnchor),
-            // The meter spans the content width rather than the width of the
-            // much narrower value/caption labels in the usage stack.
-            meter.widthAnchor.constraint(equalToConstant: Self.contentWidth - 2 * Self.inset),
+            // Both the meter and the two forecast columns span the content
+            // width rather than the width of the short labels above them.
+            meter.widthAnchor.constraint(equalToConstant: contentWidth),
+            forecastFiguresStack.widthAnchor.constraint(equalToConstant: contentWidth),
+            forecastStatusField.widthAnchor.constraint(equalToConstant: contentWidth),
         ])
 
         setAccessibilityLabel("Codex Reset Tray details")
@@ -95,7 +113,6 @@ final class TrayInfoView: NSView {
         updateCount += 1
 
         titleField.stringValue = model.title
-        versionField.stringValue = model.version
         usageValueField.stringValue = model.usageValue
         usageCaptionField.stringValue = model.usageCaption
         if let fraction = model.usageFraction {
@@ -107,11 +124,25 @@ final class TrayInfoView: NSView {
             meter.isHidden = true
         }
 
-        replaceArrangedViews(in: sectionsStack, with: model.sections.map(makeSection))
-        replaceArrangedViews(
-            in: footerStack,
-            with: model.footer.map { Self.makeBody($0, tone: .normal, toolTip: nil, size: 11) }
-        )
+        for (index, figure) in model.forecastFigures.enumerated() {
+            guard index < forecastValueFields.count else { break }
+            forecastValueFields[index].stringValue = figure.value
+            forecastCaptionFields[index].stringValue = figure.caption
+        }
+        forecastFiguresStack.toolTip = model.forecastToolTip
+
+        if let status = model.forecastStatus {
+            forecastStatusField.stringValue = status.text
+            forecastStatusField.textColor = status.tone == .error
+                ? TrayPalette.error
+                : .labelColor
+            forecastStatusField.toolTip = model.forecastToolTip
+            forecastStatusField.isHidden = false
+        } else {
+            forecastStatusField.stringValue = ""
+            forecastStatusField.toolTip = nil
+            forecastStatusField.isHidden = true
+        }
         layoutSubtreeIfNeeded()
     }
 
@@ -134,26 +165,53 @@ final class TrayInfoView: NSView {
         findField(in: self) { $0.stringValue == text }
     }
 
-    private func makeSection(_ section: TrayInfoSection) -> NSView {
-        let heading = Self.makeLabel(size: 12, weight: .semibold)
-        heading.stringValue = section.title
-        let stack = NSStackView(views: [heading] + section.rows.map {
-            Self.makeBody($0.text, tone: $0.tone, toolTip: $0.toolTip, size: 12)
-        })
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 4
-        return stack
+    /// Laid-out forecast values and captions. Used by offscreen tests to verify
+    /// both probabilities and the absence of the old sentence.
+    var forecastValues: [String] { forecastValueFields.map(\.stringValue) }
+    var forecastCaptions: [String] { forecastCaptionFields.map(\.stringValue) }
+    var forecastValueFontSizes: [CGFloat] {
+        forecastValueFields.map { $0.font?.pointSize ?? 0 }
     }
 
-    private func replaceArrangedViews(in stack: NSStackView, with views: [NSView]) {
-        for view in stack.arrangedSubviews {
-            stack.removeArrangedSubview(view)
-            view.removeFromSuperview()
+    /// Laid-out forecast column frames. Used to prove the figures are actually
+    /// side by side and share the content width.
+    var forecastColumnFrames: [NSRect] { forecastColumns.map(\.frame) }
+
+    /// The visible loading/stale/error line, if any.
+    var forecastStatusText: String? {
+        forecastStatusField.isHidden ? nil : forecastStatusField.stringValue
+    }
+
+    var forecastStatusColor: NSColor? {
+        forecastStatusField.isHidden ? nil : forecastStatusField.textColor
+    }
+
+    private func configureForecastFigures() {
+        forecastFiguresStack.orientation = .horizontal
+        forecastFiguresStack.alignment = .top
+        forecastFiguresStack.distribution = .fillEqually
+        forecastFiguresStack.spacing = Self.forecastSpacing
+
+        for _ in 0..<2 {
+            let value = Self.makeLabel(
+                size: Self.forecastValueFontSize,
+                weight: .semibold,
+                monospacedDigits: true
+            )
+            value.alignment = .center
+            let caption = Self.makeLabel(size: 12, weight: .regular)
+            caption.alignment = .center
+
+            let column = NSStackView(views: [value, caption])
+            column.orientation = .vertical
+            column.alignment = .centerX
+            column.spacing = 2
+            forecastColumns.append(column)
+            forecastValueFields.append(value)
+            forecastCaptionFields.append(caption)
+            forecastFiguresStack.addArrangedSubview(column)
         }
-        for view in views {
-            stack.addArrangedSubview(view)
-        }
+        forecastFiguresStack.setAccessibilityLabel("Reset forecast probabilities")
     }
 
     private func collectTexts(in view: NSView, into texts: inout [String]) {
@@ -174,7 +232,8 @@ final class TrayInfoView: NSView {
     }
 
     /// Single-line label in the normal label color. Nothing here is secondary
-    /// or disabled gray: every row carries information the user asked to see.
+    /// or disabled gray: loading, stale, and error state lines use the normal
+    /// label color or the readable error color.
     private static func makeLabel(
         size: CGFloat,
         weight: NSFont.Weight,
@@ -189,16 +248,10 @@ final class TrayInfoView: NSView {
         return field
     }
 
-    private static func makeBody(
-        _ text: String,
-        tone: TrayInfoTone,
-        toolTip: String?,
-        size: CGFloat
-    ) -> NSTextField {
-        let field = NSTextField(wrappingLabelWithString: text)
-        field.font = NSFont.systemFont(ofSize: size)
-        field.textColor = tone == .error ? TrayPalette.error : .labelColor
-        field.toolTip = toolTip
+    private static func makeStatusField() -> NSTextField {
+        let field = NSTextField(wrappingLabelWithString: "")
+        field.font = NSFont.systemFont(ofSize: 12)
+        field.textColor = .labelColor
         field.preferredMaxLayoutWidth = contentWidth - 2 * inset
         field.isSelectable = true
         return field

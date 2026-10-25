@@ -37,9 +37,9 @@ The app icon is always visible. Left-click it for the anchored information
 popover with every status, usage, reset, notification, and forecast value.
 Right-click (or control-click) for the actions-only native menu: the label
 toggle, Refresh, Copy Status Summary, Open codexreset.org, Support this project,
-and Quit. Use the native checked **Hide 7d Label** / **Show 7d Label** item to
-hide or show the `7d 89%` usage text. The preference is saved in `UserDefaults`
-and defaults to visible.
+and Quit. Use the native checked **Show 7d Label** item to hide or show the
+`7d 89%` usage text; the check mark reflects whether the text is visible. The
+preference is saved in `UserDefaults` and defaults to visible.
 
 The DMG packaging script attaches the image read-only during validation, checks
 the app bundle, versions, icon, both architectures, and ad-hoc signature, and

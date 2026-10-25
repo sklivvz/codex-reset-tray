@@ -48,12 +48,19 @@ final class FakeTraySource: ObservableObject, TrayMenuSource {
     @Published private(set) var state: TrayMenuState
     private(set) var menuDidOpenCount = 0
     private(set) var refreshAllCount = 0
+    private(set) var refreshNotificationAuthorizationCount = 0
+    private(set) var requestNotificationAuthorizationCount = 0
+    /// The authorization the fake system reports from a read-only refresh.
+    var notificationAuthorization: NotificationAuthorization = .authorized
+    /// The result of the explicit menu request. `nil` keeps the current value.
+    var notificationAuthorizationAfterRequest: NotificationAuthorization?
     /// Optional probe run from `menuWillOpen`, before native menu tracking
     /// begins. The live check uses it to observe the popover state at open time.
     var onMenuDidOpen: (@MainActor () -> Void)?
 
     init(state: TrayMenuState) {
         self.state = state
+        notificationAuthorization = state.notificationPermission.testAuthorization
     }
 
     var menuState: TrayMenuState { state }
@@ -93,6 +100,15 @@ final class FakeTraySource: ObservableObject, TrayMenuSource {
         state = newState
     }
 
+    /// Updates both the fake system authorization and the published menu state,
+    /// as a real authorization refresh would.
+    func setNotificationAuthorization(_ authorization: NotificationAuthorization) {
+        notificationAuthorization = authorization
+        var next = state
+        next.notificationPermission = trayPermission(for: authorization)
+        state = next
+    }
+
     func menuDidOpen() {
         menuDidOpenCount += 1
         onMenuDidOpen?()
@@ -100,6 +116,58 @@ final class FakeTraySource: ObservableObject, TrayMenuSource {
 
     func refreshAll() async {
         refreshAllCount += 1
+    }
+
+    func refreshNotificationAuthorization() async -> NotificationAuthorization {
+        refreshNotificationAuthorizationCount += 1
+        let authorization = notificationAuthorization
+        var next = state
+        next.notificationPermission = trayPermission(for: authorization)
+        state = next
+        return authorization
+    }
+
+    func requestNotificationAuthorization() async -> NotificationAuthorization {
+        requestNotificationAuthorizationCount += 1
+        if let notificationAuthorizationAfterRequest {
+            notificationAuthorization = notificationAuthorizationAfterRequest
+            notificationAuthorizationAfterRequest = nil
+        }
+        let authorization = notificationAuthorization
+        var next = state
+        next.notificationPermission = trayPermission(for: authorization)
+        state = next
+        return authorization
+    }
+}
+
+func trayPermission(
+    for authorization: NotificationAuthorization
+) -> TrayNotificationPermission {
+    switch authorization {
+    case .authorized, .provisional, .ephemeral:
+        return .allowed
+    case .notDetermined:
+        return .notDetermined
+    case .denied:
+        return .denied
+    case .error:
+        return .unknown
+    }
+}
+
+private extension TrayNotificationPermission {
+    var testAuthorization: NotificationAuthorization {
+        switch self {
+        case .allowed:
+            return .authorized
+        case .notDetermined:
+            return .notDetermined
+        case .denied:
+            return .denied
+        case .unknown:
+            return .error("test authorization unavailable")
+        }
     }
 }
 
@@ -146,6 +214,15 @@ final class FakeInfoPresenter: TrayInfoPresenting {
 }
 
 @MainActor
+final class FakeAboutPresenter: AboutPresenting {
+    private(set) var showCount = 0
+
+    func show() {
+        showCount += 1
+    }
+}
+
+@MainActor
 final class ActionRecorder {
     var terminatedCount = 0
     var openedURL: URL?
@@ -161,6 +238,7 @@ final class Harness {
     let menu = NSMenu()
     let recorder = ActionRecorder()
     let info = FakeInfoPresenter()
+    let about = FakeAboutPresenter()
     private var clickWindow: NSWindow?
     private(set) var controller: TrayMenuController!
 
@@ -178,6 +256,7 @@ final class Harness {
             openURL: { [recorder] in recorder.openedURL = $0 },
             appIconProvider: { appIcon },
             infoPresenter: info,
+            aboutPresenter: about,
             currentEvent: { [recorder] in recorder.nextEvent },
             writeToPasteboard: { [recorder] in recorder.copiedText = $0 }
         )
@@ -601,8 +680,8 @@ func testFirstOpenHasNonemptyMenuAndVisibleStatusIcon() {
     expectEqual(harness.menu.items.count, harness.model.items.count, "initial item count")
     expectEqual(
         harness.menu.items.filter { !$0.isSeparatorItem }.count,
-        6,
-        "first-open menu must contain exactly the six actions"
+        8,
+        "first-open menu must contain exactly the eight actions"
     )
 
     harness.controller.menuNeedsUpdate(harness.menu)
@@ -668,37 +747,41 @@ func testActionsMenuHasNoInformationalRows() {
         harness.model.items.map(\.role),
         [
             .action(.toggleMenuBarUsage),
+            .action(.enableNotifications),
             .action(.refresh),
             .action(.copyStatus),
             .action(.openWebsite),
             .action(.donate),
             .separator,
+            .action(.about),
             .action(.quit),
         ],
-        "right-click menu must contain only configuration, actions, and Quit separation"
+        "right-click menu must contain only configuration, actions, and native separation"
     )
     expectEqual(
         harness.menu.items.filter { !$0.isSeparatorItem }.map(\.title),
         [
-            "Hide 7d Label",
+            "Show 7d Label",
+            "Enable Notifications",
             "Refresh",
             "Copy Status Summary",
             "Open codexreset.org",
             "Support this project",
+            "About Codex Reset Tray",
             "Quit Codex Reset Tray",
         ],
-        "right-click menu must contain exactly the six configuration/action titles"
+        "right-click menu must contain exactly the eight configuration/action titles"
     )
 
     let forbiddenFragments = [
         "7-day Codex usage",
         "Forecast",
-        "Notifications",
         "Codex error",
         "Baseline",
         "Primary",
         "Secondary",
         "Latest confirmed reset",
+        "denied in System Settings",
     ]
     for item in harness.menu.items where !item.isSeparatorItem {
         expect(item.isEnabled, "'\(item.title)' action must not be grayed out")
@@ -715,9 +798,24 @@ func testActionsMenuHasNoInformationalRows() {
 
     expectEqual(harness.item(for: .action(.refresh))?.title, "Refresh", "Refresh row")
     expectEqual(
+        harness.item(for: .action(.enableNotifications))?.title,
+        "Enable Notifications",
+        "Enable Notifications row"
+    )
+    expectEqual(
+        harness.item(for: .action(.enableNotifications))?.state,
+        .on,
+        "allowed notifications show the native check mark"
+    )
+    expectEqual(
         harness.item(for: .action(.openWebsite))?.title,
         "Open codexreset.org",
         "Open site row"
+    )
+    expectEqual(
+        harness.item(for: .action(.about))?.title,
+        "About Codex Reset Tray",
+        "About row"
     )
     expectEqual(
         harness.item(for: .action(.quit))?.title,
@@ -743,15 +841,10 @@ func testErrorDataStaysInPopoverAndActionsStayAvailable() {
         expect(item.isEnabled, "actions must stay enabled in a Codex error state")
     }
     let codexInfo = TrayInfoModel.make(state: codexHarness.source.menuState)
+    expectEqual(codexInfo.usageValue, "63%", "last known usage remains in the compact popover")
     expect(
-        codexInfo.row(withRole: .codexStatus)?.text.contains("Codex error: \(codexMessage)") == true,
-        "Codex error belongs to the popover model"
-    )
-    expectEqual(codexInfo.row(withRole: .codexStatus)?.tone, .error,
-                "popover keeps the Codex error tone")
-    expect(
-        codexInfo.row(withRole: .codexWindows)?.text.contains("63%") == true,
-        "last known usage remains visible beside a Codex error in the popover"
+        !String(describing: codexInfo).contains(codexMessage),
+        "the removed Codex usage section must not leak its error into the popover"
     )
 
     let forecastMessage = "codexreset.org returned HTTP 503."
@@ -764,11 +857,9 @@ func testErrorDataStaysInPopoverAndActionsStayAvailable() {
         expect(item.isEnabled, "actions must stay enabled in a forecast error state")
     }
     let forecastInfo = TrayInfoModel.make(state: forecastHarness.source.menuState)
-    expect(
-        forecastInfo.row(withRole: .forecastSummary)?.text.contains("Forecast error: \(forecastMessage)") == true,
-        "forecast error belongs to the popover model"
-    )
-    expectEqual(forecastInfo.row(withRole: .forecastSummary)?.tone, .error,
+    expectEqual(forecastInfo.forecastState, .unavailable(error: forecastMessage),
+                "forecast error belongs to the compact popover state")
+    expectEqual(forecastInfo.forecastStatus?.tone, .error,
                 "popover keeps the forecast error tone")
 
     let cachedHarness = Harness(
@@ -782,17 +873,15 @@ func testErrorDataStaysInPopoverAndActionsStayAvailable() {
     )
     assertMenuMatchesModel(cachedHarness, "cached forecast with fresh error")
     let cachedInfo = TrayInfoModel.make(state: cachedHarness.source.menuState)
+    expectEqual(cachedInfo.forecastFigures.map(\.value), ["28%", "49%"],
+                "cached probabilities stay visible in the popover")
     expect(
-        cachedInfo.row(withRole: .forecastSummary)?.text.contains("28% within 24h") == true,
-        "cached probabilities stay visible in the popover"
-    )
-    expect(
-        cachedInfo.row(withRole: .forecastSummary)?.text.contains("stale, updated") == true,
+        cachedInfo.forecastStatus?.text.contains("Stale forecast · updated") == true,
         "cached forecast shows freshness in the popover"
     )
     expect(
-        cachedInfo.row(withRole: .forecastDetail)?.text.contains(forecastMessage) == true,
-        "fresh forecast error renders on the popover detail row"
+        cachedInfo.forecastStatus?.text.contains(forecastMessage) == true,
+        "fresh forecast error renders in the stale status line"
     )
 
     guard let image = codexHarness.statusItem.statusButton?.image else {
@@ -905,6 +994,227 @@ func testCopyStatusActionWiring() {
 }
 
 @MainActor
+func testNotificationMenuItemStates() {
+    let permissions: [TrayNotificationPermission] = [
+        .unknown, .notDetermined, .denied, .allowed,
+    ]
+    for permission in permissions {
+        var state = populatedState()
+        state.notificationPermission = permission
+        let harness = Harness(state: state)
+        guard let item = harness.item(for: .action(.enableNotifications)) else {
+            expect(false, "\(permission): Enable Notifications row must exist")
+            continue
+        }
+        expectEqual(item.title, "Enable Notifications", "\(permission): notification title")
+        expect(item.isEnabled, "\(permission): notification action stays enabled")
+        expectEqual(
+            item.state,
+            permission.allowsDelivery ? .on : .off,
+            "\(permission): notification check mark is on only when allowed"
+        )
+        expect(item.toolTip?.isEmpty == false, "\(permission): notification tooltip")
+    }
+}
+
+@MainActor
+func testNotificationActionRequestsWhenUndetermined() async {
+    let harness = Harness(state: TrayMenuState(notificationPermission: .notDetermined))
+    harness.source.notificationAuthorizationAfterRequest = .authorized
+    guard let index = harness.index(of: .action(.enableNotifications)),
+          let item = harness.item(for: .action(.enableNotifications)) else {
+        expect(false, "Enable Notifications row must exist")
+        return
+    }
+
+    expectEqual(item.state, .off, "undetermined permission starts unchecked")
+    harness.menu.performActionForItem(at: index)
+    await waitUntil { harness.source.requestNotificationAuthorizationCount == 1 }
+    await waitUntil {
+        harness.item(for: .action(.enableNotifications))?.state == .on
+    }
+
+    expectEqual(
+        harness.source.requestNotificationAuthorizationCount,
+        1,
+        "undetermined click must call requestAuthorization exactly once"
+    )
+    expectEqual(
+        harness.source.refreshNotificationAuthorizationCount,
+        1,
+        "the click checks current authorization before routing"
+    )
+    expect(harness.recorder.openedURL == nil, "a permission prompt must not also open settings")
+    expectEqual(
+        harness.item(for: .action(.enableNotifications))?.state,
+        .on,
+        "granted permission updates the native check mark"
+    )
+    expectEqual(harness.recorder.terminatedCount, 0, "notification action must not terminate")
+}
+
+@MainActor
+func testNotificationActionOpensSettingsWhenDenied() async {
+    let harness = Harness(state: TrayMenuState(notificationPermission: .denied))
+    guard let index = harness.index(of: .action(.enableNotifications)) else {
+        expect(false, "Enable Notifications row must exist")
+        return
+    }
+
+    harness.menu.performActionForItem(at: index)
+    await waitUntil { harness.recorder.openedURL != nil }
+
+    expectEqual(
+        harness.source.requestNotificationAuthorizationCount,
+        0,
+        "denied permission must never be requested again"
+    )
+    expectEqual(
+        harness.recorder.openedURL,
+        TrayMenuModel.notificationSettingsURL,
+        "denied click opens System Settings > Notifications"
+    )
+    expectEqual(harness.source.refreshNotificationAuthorizationCount, 1, "denied click refreshes state")
+}
+
+@MainActor
+func testNotificationActionOpensSettingsWhenAllowed() async {
+    let harness = Harness(state: TrayMenuState(notificationPermission: .allowed))
+    guard let index = harness.index(of: .action(.enableNotifications)) else {
+        expect(false, "Enable Notifications row must exist")
+        return
+    }
+
+    harness.menu.performActionForItem(at: index)
+    await waitUntil { harness.recorder.openedURL != nil }
+
+    expectEqual(
+        harness.source.requestNotificationAuthorizationCount,
+        0,
+        "allowed permission must not be requested again"
+    )
+    expectEqual(
+        harness.recorder.openedURL,
+        TrayMenuModel.notificationSettingsURL,
+        "allowed click keeps the checked item meaningful by opening settings"
+    )
+}
+
+@MainActor
+func testMenuOpeningRefreshesNotificationAuthorization() async {
+    let harness = Harness(state: TrayMenuState(notificationPermission: .allowed))
+    guard let item = harness.item(for: .action(.enableNotifications)) else {
+        expect(false, "Enable Notifications row must exist")
+        return
+    }
+    expectEqual(item.state, .on, "allowed permission starts checked")
+
+    // Simulate a change made in System Settings while the app was inactive.
+    harness.source.notificationAuthorization = .denied
+    harness.controller.menuWillOpen(harness.menu)
+    await waitUntil { item.state == .off }
+
+    expectEqual(item.state, .off, "menu open must refresh the permission check mark")
+    expectEqual(
+        harness.source.refreshNotificationAuthorizationCount,
+        1,
+        "menu open refreshes authorization exactly once"
+    )
+    harness.controller.menuDidClose(harness.menu)
+}
+
+@MainActor
+func testAppFocusRefreshesNotificationAuthorization() async {
+    let harness = Harness(state: TrayMenuState(notificationPermission: .denied))
+    guard let item = harness.item(for: .action(.enableNotifications)) else {
+        expect(false, "Enable Notifications row must exist")
+        return
+    }
+    expectEqual(item.state, .off, "denied permission starts unchecked")
+
+    harness.source.notificationAuthorization = .authorized
+    NotificationCenter.default.post(
+        name: NSApplication.didBecomeActiveNotification,
+        object: nil
+    )
+    await waitUntil {
+        harness.item(for: .action(.enableNotifications))?.state == .on
+    }
+
+    expectEqual(
+        harness.item(for: .action(.enableNotifications))?.state,
+        .on,
+        "app focus must refresh the permission check mark"
+    )
+    expectEqual(
+        harness.source.refreshNotificationAuthorizationCount,
+        1,
+        "app focus refreshes authorization exactly once"
+    )
+}
+
+@MainActor
+func testAboutActionWiring() {
+    let harness = Harness(state: populatedState())
+    guard let index = harness.index(of: .action(.about)),
+          let item = harness.item(for: .action(.about)) else {
+        expect(false, "About row must exist")
+        return
+    }
+
+    expectEqual(item.title, "About Codex Reset Tray", "About title")
+    expect(item.isEnabled, "About must be enabled")
+    expectEqual(item.keyEquivalent, "", "About must not have a shortcut")
+    expectEqual(
+        item.toolTip,
+        "Show version, build, and copyright information.",
+        "About tooltip"
+    )
+    expect(item.target === harness.controller, "About must target the controller")
+    expect(item.action != nil, "About must have an action selector")
+    expectEqual(harness.about.showCount, 0, "About must wait for invocation")
+
+    harness.menu.performActionForItem(at: index)
+    expectEqual(harness.about.showCount, 1, "About invokes the injected presenter exactly once")
+    expect(harness.recorder.openedURL == nil, "About must not open a URL")
+    expectEqual(harness.recorder.terminatedCount, 0, "About must not terminate")
+}
+
+@MainActor
+func testAboutPanelOptionsUseBundleMetadata() {
+    let icon = packagedAppIcon()
+    let presenter = AboutPanelPresenter(appIconProvider: { icon })
+    let options = presenter.panelOptions()
+
+    expectEqual(
+        options[.applicationName] as? String,
+        AppBuildInfo.name,
+        "About panel uses the bundle application name"
+    )
+    expectEqual(
+        options[.applicationVersion] as? String,
+        AppBuildInfo.version,
+        "About panel uses the bundle version"
+    )
+    expectEqual(
+        options[.version] as? String,
+        AppBuildInfo.build,
+        "About panel uses the bundle build"
+    )
+    if let icon {
+        expect(
+            (options[.applicationIcon] as? NSImage) === icon,
+            "About panel uses the injected bundle icon"
+        )
+    } else {
+        expect(false, "packaged app icon must load for the About panel test")
+    }
+
+    let withoutIcon = AboutPanelPresenter(appIconProvider: { nil }).panelOptions()
+    expect(withoutIcon[.applicationIcon] == nil, "missing icon is omitted instead of forced")
+}
+
+@MainActor
 func testMenuBarUsageToggleOffscreen() async {
     let harness = Harness(state: populatedState())
     guard let index = harness.index(of: .action(.toggleMenuBarUsage)),
@@ -914,7 +1224,7 @@ func testMenuBarUsageToggleOffscreen() async {
     }
 
     expectEqual(index, 0, "7d label toggle must be the first action, with no heading above it")
-    expectEqual(toggle.title, "Hide 7d Label", "toggle title")
+    expectEqual(toggle.title, "Show 7d Label", "toggle must always use the exact title")
     expect(toggle.isEnabled, "toggle must be enabled")
     expectEqual(toggle.state, .on, "usage label must be checked by default")
     expectEqual(toggle.keyEquivalent, "", "toggle must not have a shortcut")
@@ -941,7 +1251,7 @@ func testMenuBarUsageToggleOffscreen() async {
     harness.menu.performActionForItem(at: index)
     expectEqual(harness.source.showsUsageInMenuBar, false, "toggle must hide usage text")
     expectEqual(harness.controller.statusLabelView.text, "", "hidden state must clear the menu-bar text")
-    expectEqual(toggle.title, "Show 7d Label", "checked item must switch to the show action")
+    expectEqual(toggle.title, "Show 7d Label", "title must stay exact when the check mark clears")
     expectEqual(toggle.state, .off, "hidden state must clear the native check mark")
     expect(toggle.toolTip?.contains("icon is always visible") == true, "show tooltip")
     expect(harness.statusItem.isVisible, "status item must remain visible when text is hidden")
@@ -968,7 +1278,7 @@ func testMenuBarUsageToggleOffscreen() async {
     harness.menu.performActionForItem(at: index)
     expectEqual(harness.source.showsUsageInMenuBar, true, "second toggle must show usage text")
     expectEqual(harness.controller.statusLabelView.text, "7d 63%", "menu-bar text must return")
-    expectEqual(toggle.title, "Hide 7d Label", "unchecked item must switch back to the hide action")
+    expectEqual(toggle.title, "Show 7d Label", "title must stay exact when the check mark returns")
     expectEqual(toggle.state, .on, "shown state must restore the native check mark")
     expect(harness.statusItem.isVisible, "status item must remain visible after showing text again")
     guard let restoredImage = harness.statusItem.button.image else {
@@ -1103,7 +1413,7 @@ func testOpenMenuUpdatesInPlaceAndCloseRebuilds() async {
         harness.model.item(withRole: .action(.toggleMenuBarUsage))?.title,
         "open toggle row must update in place"
     )
-    expectEqual(toggleBefore.title, "Show 7d Label", "open toggle follows the hidden label state")
+    expectEqual(toggleBefore.title, "Show 7d Label", "open toggle keeps the exact title while hidden")
     expectEqual(toggleBefore.state, .off, "open toggle clears its check mark in place")
 
     harness.controller.menuDidClose(harness.menu)
@@ -1157,9 +1467,25 @@ func testSystemSchedulerRequestsOnlyWhenUndecided() async {
         presentationDelegate: NotificationPresentationDelegate()
     )
     let deniedResult = await deniedScheduler.schedule(resetAlert())
-    expectEqual(deniedResult, .notAuthorized(.denied), "denied permission prevents scheduling")
-    expectEqual(deniedCenter.requestAuthorizationCallCount, 1, "undecided permission is requested once")
-    expectEqual(deniedCenter.addedRequests.count, 0, "denied permission must not add a request")
+    expectEqual(
+        deniedResult,
+        .notAuthorized(.notDetermined),
+        "scheduling with undecided permission does not prompt"
+    )
+    expectEqual(
+        deniedCenter.requestAuthorizationCallCount,
+        0,
+        "scheduling must never request permission"
+    )
+    expectEqual(deniedCenter.addedRequests.count, 0, "undecided permission must not add a request")
+
+    let explicitDenial = await deniedScheduler.requestAuthorization()
+    expectEqual(explicitDenial, .denied, "the explicit request prompts and returns denial")
+    expectEqual(
+        deniedCenter.requestAuthorizationCallCount,
+        1,
+        "undecided permission is requested exactly once by the menu action"
+    )
 
     let grantedCenter = StubUserNotificationCenter(
         status: .notDetermined,
@@ -1169,9 +1495,15 @@ func testSystemSchedulerRequestsOnlyWhenUndecided() async {
         center: grantedCenter,
         presentationDelegate: NotificationPresentationDelegate()
     )
+    let grantedAuthorization = await grantedScheduler.requestAuthorization()
+    expectEqual(grantedAuthorization, .authorized, "explicit request grants permission")
     let grantedResult = await grantedScheduler.schedule(resetAlert())
-    expectEqual(grantedResult, .scheduled, "a granted undecided request schedules")
-    expectEqual(grantedCenter.requestAuthorizationCallCount, 1, "undecided permission is requested once")
+    expectEqual(grantedResult, .scheduled, "scheduling after the menu grant succeeds")
+    expectEqual(
+        grantedCenter.requestAuthorizationCallCount,
+        1,
+        "scheduling after a decision never asks again"
+    )
     expectEqual(grantedCenter.addedRequests.count, 1, "granted permission adds the request")
 }
 
@@ -1319,11 +1651,18 @@ func testNotificationFailureRetriesAndCommitsOnlyAfterSuccess() async {
 
     await store.pollCodex()
     expectEqual(store.baseline?.usedPercent, 80, "first poll establishes the session baseline")
-    await waitUntil { store.notificationStatus == "Notifications are allowed." }
     expectEqual(
         scheduler.requestAuthorizationCallCount,
         0,
-        "an already granted app must not be prompted on startup"
+        "the first usage fetch must not prompt for notification permission"
+    )
+    let authorization = await store.refreshNotificationAuthorization()
+    expectEqual(authorization, .authorized, "read-only authorization refresh succeeds")
+    expectEqual(store.notificationStatus, "Notifications are allowed.", "diagnostic status is available")
+    expectEqual(
+        scheduler.requestAuthorizationCallCount,
+        0,
+        "a read-only authorization refresh must never prompt"
     )
 
     await store.pollCodex()
@@ -1399,7 +1738,7 @@ func testDeniedNotificationDoesNotCommitMarker() async {
 }
 
 @MainActor
-func testUndecidedNotificationPermissionIsRequestedOnce() async {
+func testUndecidedPermissionIsNotPromptedAutomatically() async {
     let (defaults, suite) = makeStoreDefaults("authorization-undecided")
     defer { defaults.removePersistentDomain(forName: suite) }
     let deadline = Date().addingTimeInterval(86_400)
@@ -1416,14 +1755,63 @@ func testUndecidedNotificationPermissionIsRequestedOnce() async {
     })
 
     await store.pollCodex()
-    await waitUntil {
-        store.notificationStatus?.contains("denied in System Settings") == true
-    }
     await store.pollCodex()
-    await Task.yield()
+    expectEqual(
+        scheduler.requestAuthorizationCallCount,
+        0,
+        "Codex polling must never prompt for notification permission"
+    )
+    expect(store.notificationAuthorization == nil, "launch does not cache authorization")
+    expect(store.notificationStatus == nil, "launch does not invent a permission status")
 
-    expect(store.notificationStatusIsError, "denied permission is visible")
-    expectEqual(scheduler.requestAuthorizationCallCount, 1, "permission is requested only once per launch")
+    // The explicit menu route is the only request path.
+    let status = await store.requestNotificationAuthorization()
+    expectEqual(status, .denied, "explicit request returns the user's decision")
+    expectEqual(
+        scheduler.requestAuthorizationCallCount,
+        1,
+        "the menu action requests permission exactly once"
+    )
+    expectEqual(store.notificationAuthorization, .denied, "request result is cached for the check mark")
+    expect(
+        store.notificationStatus?.contains("denied in System Settings") == true,
+        "denied diagnostic status remains available for the copied summary"
+    )
+}
+
+@MainActor
+func testUndecidedResetSchedulingDoesNotPrompt() async {
+    let (defaults, suite) = makeStoreDefaults("authorization-scheduling-undecided")
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let deadline = Date().addingTimeInterval(86_400)
+    let fetcher = StubRateLimitFetcher([
+        .success(weeklySnapshot(usedPercent: 80, resetsAt: deadline)),
+        .success(weeklySnapshot(usedPercent: 6, resetsAt: deadline)),
+    ])
+    let scheduler = StubNotificationScheduler(
+        authorization: .notDetermined,
+        requestResults: [.authorized],
+        scheduleResults: [.notAuthorized(.notDetermined)]
+    )
+    let store = ResetStore(defaults: defaults, notifications: scheduler, fetchRateLimits: {
+        try fetcher.next()
+    })
+
+    await store.pollCodex()
+    await store.pollCodex()
+
+    expectEqual(scheduler.scheduleCallCount, 1, "the reset still attempts scheduling")
+    expectEqual(
+        scheduler.requestAuthorizationCallCount,
+        0,
+        "scheduling a reset must not prompt for permission"
+    )
+    expectEqual(store.baseline?.usedPercent, 80, "unscheduled reset preserves the pre-reset evidence")
+    expect(store.baseline?.alertedResetsAt == nil, "unscheduled reset commits no marker")
+    expect(
+        store.notificationStatus?.contains("not determined") == true,
+        "the diagnostic report records the undecided permission"
+    )
 }
 
 @MainActor
@@ -1504,16 +1892,24 @@ func testAuthorizationRequestErrorIsVisible() async {
     })
 
     await store.pollCodex()
-    await waitUntil {
-        store.notificationStatus?.contains("Notification permission check failed") == true
-    }
+    expectEqual(
+        scheduler.requestAuthorizationCallCount,
+        0,
+        "launch must not prompt even when authorization cannot be checked later"
+    )
 
+    let status = await store.requestNotificationAuthorization()
+    expectEqual(
+        status,
+        .error("UNErrorDomain code 1"),
+        "explicit request reports the sanitized system error"
+    )
     expect(store.notificationStatusIsError, "authorization request error must be visible")
     expect(
         store.notificationStatus?.contains("UNErrorDomain code 1") == true,
         "authorization request error includes the sanitized NSError domain and code"
     )
-    expectEqual(scheduler.requestAuthorizationCallCount, 1, "undecided permission is requested once")
+    expectEqual(scheduler.requestAuthorizationCallCount, 1, "explicit menu request runs once")
     expectEqual(scheduler.scheduleCallCount, 0, "authorization failure cannot schedule")
 }
 
@@ -1599,7 +1995,8 @@ func populatedState() -> TrayMenuState {
         notificationStatus: "Notifications are allowed.",
         forecast: forecast(),
         lastCodexCheck: runtimeNow,
-        lastForecastCheck: runtimeNow
+        lastForecastCheck: runtimeNow,
+        notificationPermission: .allowed
     )
 }
 
@@ -1629,6 +2026,14 @@ struct TrayMenuRuntimeTests {
         testErrorDataStaysInPopoverAndActionsStayAvailable()
         await testRefreshActionWiring()
         testCopyStatusActionWiring()
+        testNotificationMenuItemStates()
+        await testNotificationActionRequestsWhenUndetermined()
+        await testNotificationActionOpensSettingsWhenDenied()
+        await testNotificationActionOpensSettingsWhenAllowed()
+        await testMenuOpeningRefreshesNotificationAuthorization()
+        await testAppFocusRefreshesNotificationAuthorization()
+        testAboutActionWiring()
+        testAboutPanelOptionsUseBundleMetadata()
         testOpenWebsiteActionWiring()
         testDonationActionWiring()
         await testMenuBarUsageToggleOffscreen()
@@ -1643,7 +2048,8 @@ struct TrayMenuRuntimeTests {
         await testZeroUsageScheduledRolloverSchedulesNotification()
         await testNotificationFailureRetriesAndCommitsOnlyAfterSuccess()
         await testDeniedNotificationDoesNotCommitMarker()
-        await testUndecidedNotificationPermissionIsRequestedOnce()
+        await testUndecidedPermissionIsNotPromptedAutomatically()
+        await testUndecidedResetSchedulingDoesNotPrompt()
         await testStartupHistoricalStateDoesNotAlert()
         await testStartupScheduledResetDoesNotAlert()
         await testAuthorizationRequestErrorIsVisible()
