@@ -75,27 +75,43 @@ real menu-bar item or observe the screen.
 The app persists the latest 7-day usage baseline in `UserDefaults` under
 `codexWeeklyUsageBaselineV2`: prior used percentage, prior `resetsAt`, capture
 time, and an "already alerted" marker for that reset deadline. A notification is
-sent only when **all** of these are true:
+considered only when **all** of these are true:
 
-1. A previous baseline exists (never on the first reading).
+1. This launch has already established a session baseline. The first successful
+   reading after launch only adopts current state and never alerts, even when a
+   persisted baseline exists, because that state may describe a reset that
+   happened while the app was closed.
 2. The prior 7-day usage was greater than 0%.
-3. The current 7-day usage is at or below 1% and has dropped by at least 5
-   percentage points from the baseline.
-4. The current time is still before the **prior** window's `resetsAt`.
-5. The same response reports `ordinaryUsageAllowed == true`. False or missing
-   evidence suppresses the alert.
-6. No alert has already been sent for that prior reset deadline.
+3. The current time is more than 5 minutes before the **prior** window's
+   `resetsAt`. A reset that is due or imminent is treated as scheduled and does
+   not alert.
+4. No alert has already been scheduled for that prior reset deadline.
+5. There is a genuine restoration signal: either the new 7-day `resetsAt` is at
+   least 5 minutes later than the prior deadline while current usage is at most
+   25%, or current usage is at most 25% and has fallen materially (at least 3
+   percentage points and at least half of the prior usage, or cleared to 1% or
+   less from at least 2 points). The ceiling is deliberately above 1%: usage can
+   be consumed again before the next poll after a reset.
 
-The alert is sent at most once per reset window. It is not sent when a scheduled
-reset timestamp arrives on its own, after the prior deadline, on a parse or
-transport failure, or because a codexreset.org forecast changed. Notification
-permission is requested only after the first usage fetch has begun.
+`ordinaryUsageAllowed` is reported in the notification, but it is not required
+as evidence that the quota itself was restored. A false or missing value no
+longer suppresses a genuine deadline or usage transition.
+
+The alert is scheduled at most once per reset window. The persisted marker is
+written only after the notification scheduler accepts the request. If
+authorization is denied or scheduling fails, the prior baseline is retained so a
+later poll can retry, and the menu shows an error row with the reason. The alert
+is not sent on startup historical state, a scheduled timestamp arriving on its
+own, after the prior deadline, on a parse or transport failure, or because a
+codexreset.org forecast changed. Notification permission is requested only after
+the first usage fetch has begun.
 
 The menu shows primary/secondary windows, the persisted baseline and deadline,
-the latest forecast or forecast error, and any Codex error. `ordinaryUsageAllowed`,
-the last read time, and notification state are available in item tooltips.
-Refresh, Copy Status Summary, Show Usage in Menu Bar, Open codexreset.org, and
-Quit are always in the menu; Quit is always enabled and last.
+notification permission/delivery state, the latest forecast or forecast error,
+and any Codex error. `ordinaryUsageAllowed`, the last read time, and alert timing
+are available in item tooltips. Refresh, Copy Status Summary, Show Usage in Menu
+Bar, Open codexreset.org, and Quit are always in the menu; Quit is always enabled
+and last.
 
 ### codexreset.org forecast
 

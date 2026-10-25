@@ -28,6 +28,7 @@ struct TrayMenuTests {
         testForecastErrorRendering()
         testCachedForecastAndFreshErrorBothRender()
         testCodexErrorRendering()
+        testNotificationStatusRendering()
         testLoadingRendering()
         testWebsiteURL()
         testMenuBarUsageToggleModel()
@@ -175,6 +176,32 @@ struct TrayMenuTests {
         )
     }
 
+    private static func testNotificationStatusRendering() {
+        let allowed = TrayMenuModel.make(
+            state: TrayMenuState(notificationStatus: "Notifications are allowed.")
+        )
+        let allowedRow = allowed.item(withRole: .notificationStatus)
+        expectEqual(allowedRow?.title, "Notifications are allowed.", "allowed status is visible")
+        expectEqual(allowedRow?.tone, .normal, "allowed status is not an error")
+
+        let denied = TrayMenuModel.make(
+            state: TrayMenuState(
+                notificationStatus: "Notifications are denied in System Settings; early-restoration alerts cannot appear.",
+                notificationStatusIsError: true
+            )
+        )
+        let deniedRow = denied.item(withRole: .notificationStatus)
+        expectEqual(deniedRow?.tone, .error, "denied notifications render as an error")
+        expect(
+            deniedRow?.title.contains("denied in System Settings") == true,
+            "denied notification status is visible in the menu"
+        )
+        expect(
+            denied.item(withRole: .action(.quit))?.isEnabled == true,
+            "Quit remains available when notifications are denied"
+        )
+    }
+
     private static func testLoadingRendering() {
         let model = TrayMenuModel.make(
             state: TrayMenuState(isPollingCodex: true, isFetchingForecast: true)
@@ -246,7 +273,7 @@ struct TrayMenuTests {
         expect(summary.contains("7-day Codex usage: 63%"), "summary 7-day usage")
         expect(summary.contains("Baseline: 72%"), "summary baseline")
         expect(summary.contains("Forecast: 28% within 24h"), "summary forecast")
-        expect(summary.contains("Notifications: Notifications are allowed."), "summary notifications")
+        expect(summary.contains("Notifications are allowed."), "summary notifications")
         expect(summary.contains("Menu bar usage text: shown"), "summary menu-bar visibility")
         expect(summary.contains("no account ID, credential, or local file path"), "summary privacy note")
         expect(!summary.localizedCaseInsensitiveContains("accountId"), "summary must not include accountId")

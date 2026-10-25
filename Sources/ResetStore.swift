@@ -18,6 +18,7 @@ final class ResetStore: ObservableObject {
     @Published private(set) var isFetchingForecast = false
 
     @Published private(set) var notificationStatus: String?
+    @Published private(set) var notificationStatusIsError = false
     @Published private(set) var showsUsageInMenuBar: Bool
 
     private static let pollInterval: UInt64 = 5 * 60 * 1_000_000_000
@@ -25,17 +26,30 @@ final class ResetStore: ObservableObject {
 
     private let baselineStore: BaselineStore
     private let visibilityStore: MenuBarVisibilityStore
+    private let notifications: any NotificationScheduling
+    private let fetchRateLimits: @Sendable () async throws -> CodexRateLimitSnapshot
     private var pollingTask: Task<Void, Never>?
-    private var hasStartedFirstFetch = false
+    private var hasRequestedNotificationAuthorization = false
+    private var hasEstablishedSessionBaseline = false
+    private var hasAttemptedAlertDelivery = false
     private var lastMenuForecastFetch: Date?
     private let fetchForecast: () async throws -> ResetSnapshot
 
-    init(defaults: UserDefaults = .standard, fetchForecast: @escaping () async throws -> ResetSnapshot = ResetPage.fetch) {
+    init(
+        defaults: UserDefaults = .standard,
+        notifications: any NotificationScheduling = SystemNotificationScheduler(),
+        fetchForecast: @escaping () async throws -> ResetSnapshot = ResetPage.fetch,
+        fetchRateLimits: @escaping @Sendable () async throws -> CodexRateLimitSnapshot = {
+            try await CodexAppServerClient.fetchRateLimits()
+        }
+    ) {
         let store = BaselineStore(defaults: defaults)
         let visibility = MenuBarVisibilityStore(defaults: defaults)
         baselineStore = store
         visibilityStore = visibility
+        self.notifications = notifications
         self.fetchForecast = fetchForecast
+        self.fetchRateLimits = fetchRateLimits
         baseline = store.load()
         showsUsageInMenuBar = visibility.load()
     }
@@ -65,6 +79,7 @@ final class ResetStore: ObservableObject {
             baseline: baseline,
             lastAlertAt: lastAlertAt,
             notificationStatus: notificationStatus,
+            notificationStatusIsError: notificationStatusIsError,
             forecast: forecast,
             forecastError: forecastError,
             isFetchingForecast: isFetchingForecast,
@@ -114,43 +129,114 @@ final class ResetStore: ObservableObject {
         isPollingCodex = true
         defer { isPollingCodex = false }
 
-        if !hasStartedFirstFetch {
-            hasStartedFirstFetch = true
-            // The permission prompt starts only once the first usage fetch has begun.
-            Task { [weak self] in
-                let granted = await NotificationScheduler.requestAuthorization()
-                self?.notificationStatus = granted
-                    ? "Notifications are allowed."
-                    : "Notifications are not allowed; early-restoration alerts cannot appear."
-            }
-        }
-
         let result: Result<CodexRateLimitSnapshot, Error>
         do {
-            result = .success(try await CodexAppServerClient.fetchRateLimits())
+            result = .success(try await fetchRateLimits())
         } catch {
             result = .failure(error)
         }
+
+        // The permission prompt starts only after the first usage fetch has begun
+        // (and completed). It does not block evaluation of the reading.
+        requestNotificationAuthorizationIfNeeded()
 
         let now = Date()
         let outcome = CodexPoller.apply(result, baseline: baseline, now: now)
         if let snapshot = outcome.snapshot {
             self.snapshot = snapshot
         }
-        baseline = outcome.baseline
-        baselineStore.save(outcome.baseline)
         codexError = outcome.errorMessage
         lastCodexCheck = now
 
-        if let alert = outcome.alert {
-            lastAlertAt = now
-            let delivered = await NotificationScheduler.send(alert)
-            if delivered {
-                notificationStatus = "Early-restoration alert sent from Codex usage."
-            } else {
-                notificationStatus = "Could not schedule the early-restoration alert."
-            }
+        // A failed, unreadable, or windowless response preserves the existing
+        // baseline and can never alert.
+        guard outcome.observedWeekly != nil, let observedBaseline = outcome.baseline else {
+            return
         }
+
+        // The first successful reading of a launch only adopts current state. A
+        // persisted baseline may describe a reset from while the app was closed.
+        guard hasEstablishedSessionBaseline else {
+            hasEstablishedSessionBaseline = true
+            baseline = observedBaseline
+            baselineStore.save(observedBaseline)
+            return
+        }
+
+        guard let alert = outcome.alert else {
+            baseline = observedBaseline
+            baselineStore.save(observedBaseline)
+            return
+        }
+
+        hasAttemptedAlertDelivery = true
+        let delivery = await notifications.schedule(alert)
+        switch delivery {
+        case .delivered:
+            // Commit both the new reading and the per-deadline marker only now.
+            let committed = observedBaseline.markingAlerted(resetsAt: alert.resetsAt)
+            baseline = committed
+            baselineStore.save(committed)
+            lastAlertAt = now
+            setNotificationStatus(
+                "Early-restoration notification scheduled from Codex usage.",
+                isError: false
+            )
+        case .notAuthorized(let authorization):
+            // Keep the previous baseline so the next poll can retry with the same
+            // evidence instead of silently losing the restoration.
+            setNotificationStatus(
+                "Early-restoration notification not sent: \(authorization.explanation)",
+                isError: true
+            )
+        case .failed(let message):
+            setNotificationStatus(
+                "Could not schedule the early-restoration notification: \(message)",
+                isError: true
+            )
+        }
+    }
+
+    private func requestNotificationAuthorizationIfNeeded() {
+        guard !hasRequestedNotificationAuthorization else { return }
+        hasRequestedNotificationAuthorization = true
+        // This starts only after the first usage fetch has begun. It deliberately
+        // does not block polling if the system prompt is left unanswered.
+        Task { [weak self] in
+            guard let self else { return }
+            let status = await self.notifications.requestAuthorization()
+            self.applyAuthorizationStatus(status)
+        }
+    }
+
+    private func applyAuthorizationStatus(_ status: NotificationAuthorization) {
+        // A delivery result is more specific than a background authorization
+        // result; never let a late permission response hide a failure or success.
+        guard !hasAttemptedAlertDelivery else { return }
+        switch status {
+        case .authorized, .provisional, .ephemeral:
+            setNotificationStatus("Notifications are allowed.", isError: false)
+        case .denied:
+            setNotificationStatus(
+                "Notifications are denied in System Settings; early-restoration alerts cannot appear.",
+                isError: true
+            )
+        case .notDetermined:
+            setNotificationStatus(
+                "Notification permission has not been decided; early-restoration alerts may not appear.",
+                isError: true
+            )
+        case .error(let message):
+            setNotificationStatus(
+                "Could not request notification permission: \(message)",
+                isError: true
+            )
+        }
+    }
+
+    private func setNotificationStatus(_ text: String, isError: Bool) {
+        notificationStatus = text
+        notificationStatusIsError = isError
     }
 
     func refreshAll() async {
