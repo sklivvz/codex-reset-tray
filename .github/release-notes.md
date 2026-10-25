@@ -4,6 +4,8 @@ Version 0.2.0 improves early-reset alerts, recovers from forecast page changes
 and refresh failures, and adds a readable information window. Left-click the
 tray icon for details; right-click for actions. The tray icon now uses the
 packaged app artwork, with a compact gap before the optional 7-day label.
+The actions menu and repository Sponsor button now link to the existing
+PayPal.Me/sklivvz recipient page.
 
 Download the universal macOS DMG (Apple Silicon and Intel) and its `.sha256`
 checksum from the assets below.
