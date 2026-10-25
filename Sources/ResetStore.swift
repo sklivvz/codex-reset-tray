@@ -170,6 +170,7 @@ final class ResetStore: ObservableObject {
         let delivery = await notifications.schedule(alert)
         switch delivery {
         case .scheduled:
+            notificationAuthorization = .authorized
             // Commit both the new reading and the per-deadline marker only now.
             let committed = observedBaseline.markingAlerted(resetsAt: alert.resetsAt)
             baseline = committed
@@ -180,6 +181,7 @@ final class ResetStore: ObservableObject {
                 isError: false
             )
         case .notAuthorized(let authorization):
+            notificationAuthorization = authorization
             // Keep the previous baseline so the next poll can retry with the same
             // evidence instead of silently losing the restoration.
             setNotificationStatus(
@@ -187,6 +189,9 @@ final class ResetStore: ObservableObject {
                 isError: true
             )
         case .failed(let message):
+            // Scheduling only runs after the authorization check passes, so the
+            // failure still came from an allowed permission state.
+            notificationAuthorization = .authorized
             setNotificationStatus(
                 "Could not schedule the reset notification: \(message)",
                 isError: true
@@ -212,10 +217,15 @@ final class ResetStore: ObservableObject {
     }
 
     private func applyNotificationAuthorization(_ status: NotificationAuthorization) {
+        let previousStatus = notificationAuthorization
         notificationAuthorization = status
         // A scheduling result is more specific than a read-only authorization
-        // result; never let a late permission response hide a failure or success.
-        guard !hasAttemptedNotificationScheduling else { return }
+        // result. Preserve it while the permission state is unchanged, but
+        // replace it when System Settings changes the permission so the copied
+        // status summary does not stay stale.
+        let permissionChanged = TrayNotificationPermission(previousStatus)
+            != TrayNotificationPermission(status)
+        guard !hasAttemptedNotificationScheduling || permissionChanged else { return }
         switch status {
         case .authorized, .provisional, .ephemeral:
             setNotificationStatus("Notifications are allowed.", isError: false)

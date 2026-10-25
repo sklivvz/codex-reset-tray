@@ -129,8 +129,8 @@ final class FakeTraySource: ObservableObject, TrayMenuSource {
 
     func requestNotificationAuthorization() async -> NotificationAuthorization {
         requestNotificationAuthorizationCount += 1
-        if let notificationAuthorizationAfterRequest {
-            notificationAuthorization = notificationAuthorizationAfterRequest
+        if let pendingAuthorization = notificationAuthorizationAfterRequest {
+            notificationAuthorization = pendingAuthorization
             notificationAuthorizationAfterRequest = nil
         }
         let authorization = notificationAuthorization
@@ -448,6 +448,12 @@ final class StubNotificationScheduler: NotificationScheduling, @unchecked Sendab
                 currentAuthorization = requestResults.removeFirst()
             }
             return currentAuthorization
+        }
+    }
+
+    func setAuthorization(_ authorization: NotificationAuthorization) {
+        withLock {
+            currentAuthorization = authorization
         }
     }
 
@@ -1738,6 +1744,70 @@ func testDeniedNotificationDoesNotCommitMarker() async {
 }
 
 @MainActor
+func testAuthorizationChangeRefreshesSchedulingDiagnostic() async {
+    let (defaults, suite) = makeStoreDefaults("authorization-after-scheduling")
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let deadline = Date().addingTimeInterval(86_400)
+    let fetcher = StubRateLimitFetcher([
+        .success(weeklySnapshot(usedPercent: 80, resetsAt: deadline)),
+        .success(weeklySnapshot(usedPercent: 6, resetsAt: deadline)),
+    ])
+    let scheduler = StubNotificationScheduler(
+        authorization: .denied,
+        scheduleResults: [.notAuthorized(.denied)]
+    )
+    let store = ResetStore(defaults: defaults, notifications: scheduler, fetchRateLimits: {
+        try fetcher.next()
+    })
+
+    await store.pollCodex()
+    await store.pollCodex()
+    expectEqual(scheduler.scheduleCallCount, 1, "the reset attempted scheduling once")
+    expect(
+        TrayMenuModel.statusSummary(for: store.menuState).contains("denied in System Settings"),
+        "the scheduling failure records the denied permission"
+    )
+
+    // Re-reading an unchanged permission must keep the more specific
+    // scheduling result instead of replacing it with the generic status.
+    _ = await store.refreshNotificationAuthorization()
+    expectEqual(
+        store.menuState.notificationPermission,
+        .denied,
+        "unchanged permission keeps the menu check"
+    )
+    expect(
+        store.notificationStatus?.contains("Reset notification not scheduled") == true,
+        "unchanged permission preserves the scheduling diagnostic"
+    )
+
+    // Changing permission in System Settings must refresh the copied summary.
+    scheduler.setAuthorization(.authorized)
+    let status = await store.refreshNotificationAuthorization()
+    expectEqual(status, .authorized, "refresh observes the System Settings change")
+    expectEqual(
+        store.menuState.notificationPermission,
+        .allowed,
+        "changed permission updates the menu check"
+    )
+    expectEqual(
+        store.notificationStatus,
+        "Notifications are allowed.",
+        "changed permission refreshes the diagnostic"
+    )
+    expect(!store.notificationStatusIsError, "the refreshed allowed diagnostic is not an error")
+    let summary = TrayMenuModel.statusSummary(for: store.menuState)
+    expect(
+        !summary.contains("denied in System Settings"),
+        "changed permission removes stale denial text"
+    )
+    expect(
+        summary.contains("Notifications are allowed."),
+        "the copied summary reports the new permission"
+    )
+}
+
+@MainActor
 func testUndecidedPermissionIsNotPromptedAutomatically() async {
     let (defaults, suite) = makeStoreDefaults("authorization-undecided")
     defer { defaults.removePersistentDomain(forName: suite) }
@@ -2048,6 +2118,7 @@ struct TrayMenuRuntimeTests {
         await testZeroUsageScheduledRolloverSchedulesNotification()
         await testNotificationFailureRetriesAndCommitsOnlyAfterSuccess()
         await testDeniedNotificationDoesNotCommitMarker()
+        await testAuthorizationChangeRefreshesSchedulingDiagnostic()
         await testUndecidedPermissionIsNotPromptedAutomatically()
         await testUndecidedResetSchedulingDoesNotPrompt()
         await testStartupHistoricalStateDoesNotAlert()
